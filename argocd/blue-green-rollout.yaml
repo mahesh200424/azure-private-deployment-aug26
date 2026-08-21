@@ -1,0 +1,387 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: myapp
+  namespace: myapp
+  labels:
+    app.kubernetes.io/name: myapp
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: myapp-project
+    app.kubernetes.io/managed-by: argocd
+  annotations:
+    rollout.argoproj.io/revision: "1"
+spec:
+  # Number of desired pods (can be overridden by HPA)
+  replicas: 3
+
+  # Label selector for pods managed by this Rollout
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: myapp
+
+  # Revision history — how many old ReplicaSets to retain
+  revisionHistoryLimit: 5
+
+  # Progressive delivery strategy
+  strategy:
+    blueGreen:
+      # ---------------------------------------------------------------
+      # Service routing
+      # ---------------------------------------------------------------
+      # Service that receives 100% of live production traffic (blue)
+      activeService: myapp-active
+      # Service that receives preview/test traffic (green, new version)
+      previewService: myapp-preview
+
+      # ---------------------------------------------------------------
+      # Promotion control
+      # ---------------------------------------------------------------
+      # Require manual promotion — operator must run:
+      #   kubectl argo rollouts promote myapp -n myapp
+      autoPromotionEnabled: false
+
+      # How long (seconds) to wait before automatically promoting
+      # Only takes effect if autoPromotionEnabled: true
+      # autoPromotionSeconds: 600
+
+      # ---------------------------------------------------------------
+      # Scale-down policy
+      # ---------------------------------------------------------------
+      # Seconds to wait before scaling down the old (blue) ReplicaSet
+      # after successful promotion. Gives time for in-flight requests
+      # to drain and for emergency rollback if needed.
+      scaleDownDelaySeconds: 30
+
+      # Revision limit for scale-down delay tracking
+      scaleDownDelayRevisionLimit: 2
+
+      # ---------------------------------------------------------------
+      # Pre-promotion analysis
+      # Runs against the PREVIEW (green) environment BEFORE promoting
+      # to active. If analysis fails, promotion is blocked.
+      # ---------------------------------------------------------------
+      prePromotionAnalysis:
+        templates:
+          - templateName: myapp-analysis
+        args:
+          # Pass the preview service name so metrics are scoped to green pods
+          - name: service-name
+            value: myapp-preview
+          # Success rate threshold — must be >= 99% to promote
+          - name: success-rate-threshold
+            value: "0.99"
+          # Error rate threshold — must be <= 1%
+          - name: error-rate-threshold
+            value: "0.01"
+          # p99 latency threshold in milliseconds
+          - name: latency-p99-threshold
+            value: "500"
+
+      # ---------------------------------------------------------------
+      # Post-promotion analysis
+      # Runs against the ACTIVE (green, now promoted) environment.
+      # If analysis fails, an automatic rollback is triggered.
+      # ---------------------------------------------------------------
+      postPromotionAnalysis:
+        templates:
+          - templateName: myapp-analysis
+        args:
+          # Now checking the active service (post-promotion)
+          - name: service-name
+            value: myapp-active
+          # Slightly stricter thresholds post-promotion (production traffic)
+          - name: success-rate-threshold
+            value: "0.995"
+          - name: error-rate-threshold
+            value: "0.005"
+          - name: latency-p99-threshold
+            value: "400"
+
+      # ---------------------------------------------------------------
+      # Preview replica count
+      # Run the same number of replicas in preview as production
+      # to get representative analysis results
+      # ---------------------------------------------------------------
+      previewReplicaCount: 3
+
+      # ---------------------------------------------------------------
+      # Anti-affinity: ensure blue and green pods land on different nodes
+      # ---------------------------------------------------------------
+      antiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution: {}
+        preferredDuringSchedulingIgnoredDuringExecution:
+          weight: 1
+
+  # ---------------------------------------------------------------
+  # Pod template — identical to a Deployment's spec.template
+  # ---------------------------------------------------------------
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: myapp
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: myapp-project
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+        # Force pod restart on ConfigMap change (checksum approach)
+        # checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: myapp
+      terminationGracePeriodSeconds: 60
+
+      # Security context — run as non-root
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Image pull secrets for Azure Container Registry
+      imagePullSecrets:
+        - name: acr-pull-secret  # TODO: Create this secret for your ACR
+
+      initContainers: []
+
+      containers:
+        - name: myapp
+          image: your-registry.azurecr.io/myapp:latest  # TODO: Replace with your image
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+
+          # Container security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          # Environment variables
+          env:
+            - name: APP_ENV
+              value: production
+            - name: APP_PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              value: info
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          envFrom:
+            - configMapRef:
+                name: myapp-config
+            - secretRef:
+                name: myapp-secrets
+
+          # Resource requests and limits
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          # Health probes
+          startupProbe:
+            httpGet:
+              path: /healthz/startup
+              port: http
+            failureThreshold: 30
+            periodSeconds: 10
+
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Volume mounts
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/myapp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+
+      # Topology spread for HA across availability zones
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: myapp
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: myapp
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - myapp
+                topologyKey: kubernetes.io/hostname
+
+      nodeSelector:
+        kubernetes.io/os: linux
+
+---
+# ---------------------------------------------------------------
+# Active Service — production traffic (routes to stable/blue pods)
+# ---------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-active
+  namespace: myapp
+  labels:
+    app.kubernetes.io/name: myapp
+    app.kubernetes.io/component: service-active
+  annotations:
+    # Azure Load Balancer annotations (if exposing externally)
+    # service.beta.kubernetes.io/azure-load-balancer-internal: "true"
+spec:
+  selector:
+    app.kubernetes.io/name: myapp
+    # Argo Rollouts injects the active/preview pod hash selector automatically
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
+  type: ClusterIP
+
+---
+# ---------------------------------------------------------------
+# Preview Service — preview traffic (routes to canary/green pods)
+# ---------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp-preview
+  namespace: myapp
+  labels:
+    app.kubernetes.io/name: myapp
+    app.kubernetes.io/component: service-preview
+spec:
+  selector:
+    app.kubernetes.io/name: myapp
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http
+  type: ClusterIP
+
+---
+# ---------------------------------------------------------------
+# HorizontalPodAutoscaler — scales the active ReplicaSet
+# ---------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: myapp
+  namespace: myapp
+  labels:
+    app.kubernetes.io/name: myapp
+spec:
+  # Point at the Rollout, not a Deployment
+  scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    name: myapp
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5 min stabilization before scaling down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+
+---
+# ---------------------------------------------------------------
+# PodDisruptionBudget — ensure minimum availability during disruptions
+# ---------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: myapp
+  namespace: myapp
+  labels:
+    app.kubernetes.io/name: myapp
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: myapp

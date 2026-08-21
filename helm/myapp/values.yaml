@@ -1,0 +1,116 @@
+# Default values for myapp.
+# This is a YAML-formatted file.
+
+replicaCount: 2
+
+image:
+  repository: myacr.azurecr.io/myapp
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Blue-Green deployment configuration
+blueGreen:
+  enabled: true
+  # activeSlot controls which slot the myapp-active service points to: "blue" or "green"
+  activeSlot: blue
+  blue:
+    tag: "1.0.0"
+  green:
+    tag: "1.1.0"
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations:
+    azure.workload.identity/client-id: ""  # Set to your Azure Managed Identity client ID
+
+# Pod-level annotations injected into both blue and green deployments
+podAnnotations:
+  azure.workload.identity/use: "true"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  host: myapp.example.com
+  tls:
+    enabled: false
+    secretName: myapp-tls
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Azure Key Vault integration via Secrets Store CSI Driver
+keyVault:
+  vaultName: "my-keyvault"
+  tenantId: "00000000-0000-0000-0000-000000000000"
+  secrets:
+    - secretName: db-password
+      objectName: db-password
+      objectType: secret
+    - secretName: api-key
+      objectName: api-key
+      objectType: secret
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz/live
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 5
+  failureThreshold: 3
+  successThreshold: 1
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /healthz/ready
+    port: 8080
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+  successThreshold: 1
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1  # use either minAvailable or maxUnavailable, not both
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - myapp
+          topologyKey: kubernetes.io/hostname

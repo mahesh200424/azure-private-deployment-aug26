@@ -1,0 +1,129 @@
+{{- if .Values.blueGreen.enabled }}
+---
+# Blue slot service — always routes to blue pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}-blue
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    app.kubernetes.io/slot: blue
+  annotations:
+    service.kubernetes.io/slot: blue
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" "blue") | nindent 4 }}
+
+---
+# Green slot service — always routes to green pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}-green
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    app.kubernetes.io/slot: green
+  annotations:
+    service.kubernetes.io/slot: green
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" "green") | nindent 4 }}
+
+---
+# Active service — selector switches based on blueGreen.activeSlot value.
+# To cut over traffic: helm upgrade --set blueGreen.activeSlot=green
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}-active
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    app.kubernetes.io/slot: {{ .Values.blueGreen.activeSlot }}
+    app.kubernetes.io/active: "true"
+  annotations:
+    service.kubernetes.io/active-slot: {{ .Values.blueGreen.activeSlot }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" .Values.blueGreen.activeSlot) | nindent 4 }}
+
+{{- else }}
+---
+# Fallback single service when blue-green is disabled
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "myapp.selectorLabels" . | nindent 4 }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "myapp.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                {{- if .Values.blueGreen.enabled }}
+                name: {{ include "myapp.fullname" . }}-active
+                {{- else }}
+                name: {{ include "myapp.fullname" . }}
+                {{- end }}
+                port:
+                  number: {{ .Values.service.port }}
+{{- end }}

@@ -1,0 +1,272 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: myapp-project
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: myapp-project
+  annotations:
+    # Prevent accidental deletion of the project
+    argocd.argoproj.io/sync-wave: "-1"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "Production GitOps project for myapp blue-green deployments on AKS"
+
+  # -----------------------------------------------------------------------
+  # Source repositories allowed for this project
+  # -----------------------------------------------------------------------
+  sourceRepos:
+    # Primary application GitOps repository
+    - https://github.com/your-org/your-repo.git        # TODO: Replace with your repo
+    # Helm chart repositories (if using external charts)
+    - https://charts.bitnami.com/bitnami
+    - https://prometheus-community.github.io/helm-charts
+    - https://argoproj.github.io/argo-helm
+    # OCI registries (Azure Container Registry for Helm charts)
+    - registry://your-registry.azurecr.io              # TODO: Replace with your ACR
+
+  # -----------------------------------------------------------------------
+  # Allowed destination clusters and namespaces
+  # -----------------------------------------------------------------------
+  destinations:
+    # In-cluster deployments — application namespace
+    - server: https://kubernetes.default.svc
+      namespace: myapp
+    # In-cluster — staging namespace (for preview environments)
+    - server: https://kubernetes.default.svc
+      namespace: myapp-staging
+    # In-cluster — ArgoCD namespace (for project-scoped resources)
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+    # In-cluster — monitoring namespace (for ServiceMonitors, etc.)
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+
+  # -----------------------------------------------------------------------
+  # Cluster-scoped resource types this project is allowed to manage
+  # -----------------------------------------------------------------------
+  clusterResourceWhitelist:
+    # Core cluster resources needed for the application
+    - group: ""
+      kind: Namespace
+    - group: ""
+      kind: PersistentVolume
+    # RBAC resources
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    # Storage classes for PVC provisioning
+    - group: storage.k8s.io
+      kind: StorageClass
+    # Custom Resource Definitions (for operator-managed resources)
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+    # Certificate manager cluster-scoped resources
+    - group: cert-manager.io
+      kind: ClusterIssuer
+    # Admission webhooks
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+    # Argo Rollouts cluster-scoped
+    - group: argoproj.io
+      kind: ClusterAnalysisTemplate
+
+  # -----------------------------------------------------------------------
+  # Namespace-scoped resource blacklist (deny sensitive resources)
+  # -----------------------------------------------------------------------
+  namespaceResourceBlacklist:
+    # Prevent managing ResourceQuota — handled by platform team
+    - group: ""
+      kind: ResourceQuota
+    # Prevent managing LimitRange — handled by platform team
+    - group: ""
+      kind: LimitRange
+    # Prevent managing NetworkPolicy — handled by security team
+    # (remove this if your app needs to manage its own NetworkPolicies)
+    # - group: networking.k8s.io
+    #   kind: NetworkPolicy
+
+  # -----------------------------------------------------------------------
+  # Namespace-scoped resource whitelist (explicitly allowed resource types)
+  # -----------------------------------------------------------------------
+  namespaceResourceWhitelist:
+    # Core workload resources
+    - group: ""
+      kind: ConfigMap
+    - group: ""
+      kind: Endpoints
+    - group: ""
+      kind: Event
+    - group: ""
+      kind: PersistentVolumeClaim
+    - group: ""
+      kind: Pod
+    - group: ""
+      kind: ReplicationController
+    - group: ""
+      kind: Secret
+    - group: ""
+      kind: Service
+    - group: ""
+      kind: ServiceAccount
+    # Apps resources
+    - group: apps
+      kind: DaemonSet
+    - group: apps
+      kind: Deployment
+    - group: apps
+      kind: ReplicaSet
+    - group: apps
+      kind: StatefulSet
+    # Autoscaling
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+    - group: autoscaling.k8s.io
+      kind: VerticalPodAutoscaler
+    # Batch
+    - group: batch
+      kind: CronJob
+    - group: batch
+      kind: Job
+    # Networking
+    - group: networking.k8s.io
+      kind: Ingress
+    - group: networking.k8s.io
+      kind: NetworkPolicy
+    # RBAC (namespace-scoped)
+    - group: rbac.authorization.k8s.io
+      kind: Role
+    - group: rbac.authorization.k8s.io
+      kind: RoleBinding
+    # Policy
+    - group: policy
+      kind: PodDisruptionBudget
+    # Monitoring
+    - group: monitoring.coreos.com
+      kind: ServiceMonitor
+    - group: monitoring.coreos.com
+      kind: PrometheusRule
+    - group: monitoring.coreos.com
+      kind: PodMonitor
+    # Argo Rollouts
+    - group: argoproj.io
+      kind: Rollout
+    - group: argoproj.io
+      kind: AnalysisTemplate
+    - group: argoproj.io
+      kind: AnalysisRun
+    - group: argoproj.io
+      kind: Experiment
+    # Cert-manager
+    - group: cert-manager.io
+      kind: Certificate
+    - group: cert-manager.io
+      kind: CertificateRequest
+    - group: cert-manager.io
+      kind: Issuer
+
+  # -----------------------------------------------------------------------
+  # Project-scoped RBAC roles
+  # -----------------------------------------------------------------------
+  roles:
+    # --- Developer role: read-only access + ability to sync ---
+    - name: developer
+      description: "Developers can view and sync applications but cannot delete them"
+      policies:
+        # Allow getting, listing, syncing, and refreshing applications
+        - p, proj:myapp-project:developer, applications, get, myapp-project/*, allow
+        - p, proj:myapp-project:developer, applications, sync, myapp-project/*, allow
+        - p, proj:myapp-project:developer, applications, action/*, myapp-project/*, allow
+        # Allow reading logs
+        - p, proj:myapp-project:developer, logs, get, myapp-project/*, allow
+        # Allow exec into pods (remove if not needed)
+        - p, proj:myapp-project:developer, exec, create, myapp-project/*, allow
+        # Deny delete
+        - p, proj:myapp-project:developer, applications, delete, myapp-project/*, deny
+      groups:
+        # Map to Azure AD / OIDC group  TODO: Replace with your IDP group
+        - your-org:developers
+
+    # --- Operator role: full application management ---
+    - name: operator
+      description: "Operators can manage all application lifecycle operations"
+      policies:
+        - p, proj:myapp-project:operator, applications, *, myapp-project/*, allow
+        - p, proj:myapp-project:operator, repositories, *, *, allow
+        - p, proj:myapp-project:operator, logs, get, myapp-project/*, allow
+        - p, proj:myapp-project:operator, exec, create, myapp-project/*, allow
+      groups:
+        - your-org:operators   # TODO: Replace with your IDP group
+
+    # --- CI/CD pipeline role: sync and update images ---
+    - name: ci-cd
+      description: "CI/CD pipelines can sync and update application images"
+      policies:
+        - p, proj:myapp-project:ci-cd, applications, get, myapp-project/*, allow
+        - p, proj:myapp-project:ci-cd, applications, sync, myapp-project/*, allow
+        - p, proj:myapp-project:ci-cd, applications, update, myapp-project/*, allow
+        - p, proj:myapp-project:ci-cd, applications, override, myapp-project/*, allow
+      groups:
+        - your-org:ci-cd-bots  # TODO: Replace with your CI service account group
+
+    # --- Read-only role: for monitoring and dashboards ---
+    - name: readonly
+      description: "Read-only access for monitoring tools and dashboards"
+      policies:
+        - p, proj:myapp-project:readonly, applications, get, myapp-project/*, allow
+        - p, proj:myapp-project:readonly, logs, get, myapp-project/*, allow
+      groups:
+        - your-org:readonly    # TODO: Replace with your IDP group
+
+  # -----------------------------------------------------------------------
+  # Sync windows — restrict when automated sync can run
+  # -----------------------------------------------------------------------
+  syncWindows:
+    # Allow automated sync Monday–Friday during business hours (UTC)
+    - kind: allow
+      schedule: "0 8 * * 1-5"     # 08:00 UTC Mon–Fri
+      duration: 10h                # Window open for 10 hours (closes at 18:00)
+      applications:
+        - "*"
+      namespaces:
+        - myapp
+      clusters:
+        - https://kubernetes.default.svc
+      manualSync: true             # Manual sync always allowed even outside window
+
+    # Deny automated sync during maintenance window (Saturday 02:00–06:00 UTC)
+    - kind: deny
+      schedule: "0 2 * * 6"
+      duration: 4h
+      applications:
+        - "*"
+      namespaces:
+        - myapp
+      clusters:
+        - https://kubernetes.default.svc
+      manualSync: false            # Block even manual syncs during maintenance
+
+  # -----------------------------------------------------------------------
+  # Signature keys for commit verification (optional — enable if using GPG)
+  # -----------------------------------------------------------------------
+  # signatureKeys:
+  #   - keyID: ABCD1234EF567890  # TODO: Add your GPG key ID
+
+  # -----------------------------------------------------------------------
+  # Orphaned resources monitoring
+  # -----------------------------------------------------------------------
+  orphanedResources:
+    # Warn about resources in the namespace that are not managed by ArgoCD
+    warn: true
+    ignore:
+      # Ignore secrets created by Kubernetes (e.g., service account tokens)
+      - group: ""
+        kind: Secret
+        name: "default-token-*"
+      # Ignore resources created by cert-manager
+      - group: cert-manager.io
+        kind: CertificateRequest

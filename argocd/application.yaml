@@ -1,0 +1,213 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: myapp
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: myapp
+    app.kubernetes.io/part-of: myapp-project
+    environment: production
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: myapp-deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: myapp-alerts
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: myapp-alerts
+  finalizers:
+    # Ensures the application is fully deleted before the ArgoCD resource is removed
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Project this application belongs to
+  project: myapp-project
+
+  # Source repository configuration
+  source:
+    repoURL: https://github.com/your-org/your-repo.git  # TODO: Replace with your Git repo URL
+    targetRevision: HEAD
+    path: helm/myapp
+
+    # Helm-specific configuration
+    helm:
+      # Release name override (defaults to app name if omitted)
+      releaseName: myapp
+
+      # Values files to layer (applied in order, later files take precedence)
+      valueFiles:
+        - values.yaml
+        - values-production.yaml
+
+      # Inline values override (highest precedence, merged on top of valueFiles)
+      values: |
+        replicaCount: 3
+
+        image:
+          repository: your-registry.azurecr.io/myapp  # TODO: Replace with your ACR
+          tag: ""  # Managed by ArgoCD image updater or CI/CD pipeline
+          pullPolicy: IfNotPresent
+
+        # Blue-green deployment via Argo Rollouts
+        rollout:
+          enabled: true
+          strategy: blueGreen
+
+        service:
+          active:
+            name: myapp-active
+            port: 80
+            targetPort: 8080
+          preview:
+            name: myapp-preview
+            port: 80
+            targetPort: 8080
+
+        ingress:
+          enabled: true
+          className: nginx
+          annotations:
+            kubernetes.io/ingress.class: nginx
+            nginx.ingress.kubernetes.io/ssl-redirect: "true"
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+          hosts:
+            - host: myapp.example.com  # TODO: Replace with your domain
+              paths:
+                - path: /
+                  pathType: Prefix
+          tls:
+            - secretName: myapp-tls
+              hosts:
+                - myapp.example.com
+
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+
+        autoscaling:
+          enabled: true
+          minReplicas: 3
+          maxReplicas: 10
+          targetCPUUtilizationPercentage: 70
+          targetMemoryUtilizationPercentage: 80
+
+        podDisruptionBudget:
+          enabled: true
+          minAvailable: 2
+
+        serviceAccount:
+          create: true
+          annotations:
+            azure.workload.identity/client-id: ""  # TODO: Add Azure workload identity client ID
+
+        podAnnotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/port: "8080"
+          prometheus.io/path: "/metrics"
+
+        # Azure-specific node selection
+        nodeSelector:
+          kubernetes.io/os: linux
+          agentpool: default
+
+        tolerations: []
+
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchExpressions:
+                      - key: app.kubernetes.io/name
+                        operator: In
+                        values:
+                          - myapp
+                  topologyKey: kubernetes.io/hostname
+
+      # Pass additional parameters as --set flags
+      parameters:
+        - name: global.environment
+          value: production
+        - name: global.region
+          value: eastus  # TODO: Replace with your Azure region
+
+  # Destination cluster and namespace
+  destination:
+    # Use in-cluster deployment (ArgoCD is running in the same cluster)
+    server: https://kubernetes.default.svc
+    namespace: myapp
+
+  # Sync policy — automated GitOps with safety guards
+  syncPolicy:
+    automated:
+      # Remove resources from cluster that are no longer in Git
+      prune: true
+      # Revert manual changes made directly to the cluster
+      selfHeal: true
+      # Allow deleting running pods during sync
+      allowEmpty: false
+
+    syncOptions:
+      # Automatically create the destination namespace if it doesn't exist
+      - CreateNamespace=true
+      # Use server-side apply (handles large resources, CRDs, merge conflicts better)
+      - ServerSideApply=true
+      # Fail the sync if any resource fails to sync
+      - FailOnSharedResource=true
+      # Respect ignore differences during sync
+      - RespectIgnoreDifferences=true
+      # Prune resources only after all others have synced successfully
+      - PrunePropagationPolicy=foreground
+      # Apply resources in waves defined by sync-wave annotations
+      - ApplyOutOfSyncOnly=true
+
+    # Retry policy for transient failures
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Fields to ignore when comparing live state with desired state
+  # Prevents unnecessary sync triggers for fields managed by other controllers
+  ignoreDifferences:
+    # Ignore replicas managed by HPA
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    # Ignore replicas managed by HPA on Rollout
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/replicas
+    # Ignore fields injected by admission webhooks (e.g., Istio sidecar)
+    - group: apps
+      kind: Deployment
+      managedFieldsManagers:
+        - kube-controller-manager
+    # Ignore token fields in ServiceAccounts (managed by k8s)
+    - group: ""
+      kind: ServiceAccount
+      jsonPointers:
+        - /secrets
+    # Ignore caBundle injected by cert-manager or webhook controllers
+    - group: admissionregistration.k8s.io
+      kind: MutatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[]?.clientConfig.caBundle
+    # Ignore last-applied-configuration annotation (set by kubectl apply)
+    - group: "*"
+      kind: "*"
+      managedFieldsManagers:
+        - kubectl-client-side-apply
+
+  # Health check override for Argo Rollouts
+  # ArgoCD natively understands Rollout health if the Argo Rollouts plugin is installed
+  revisionHistoryLimit: 10

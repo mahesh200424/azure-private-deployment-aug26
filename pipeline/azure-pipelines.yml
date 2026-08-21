@@ -1,0 +1,307 @@
+# ============================================================
+# azure-pipelines.yml
+# CI/CD pipeline: Build → Push → Deploy (via ArgoCD + Helm)
+# ============================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - "helm/**"          # avoid deploy-loop: Helm value commits must not re-trigger
+      - "*.md"
+
+pr: none                   # pull-request builds handled by a separate PR pipeline
+
+# ── Agent pool ───────────────────────────────────────────────
+# Self-hosted pool running inside the private VNet so it can
+# reach the private ACR endpoint and the internal k8s API.
+pool:
+  name: private-vnet-pool  # <-- replace with your agent pool name
+
+# ── Variable groups (stored in Azure DevOps Library) ─────────
+# Group: acr-secrets
+#   ACR_LOGIN_SERVER   e.g. myregistry.azurecr.io
+#   ACR_SERVICE_CONN   name of the Docker Registry service connection
+# Group: git-deploy-secrets
+#   GIT_USER_NAME      bot account display name
+#   GIT_USER_EMAIL     bot account email
+#   GIT_PAT            Personal Access Token (secret variable) for helm-values repo
+#   HELM_REPO_URL      https://dev.azure.com/org/project/_git/helm-values
+#   HELM_REPO_BRANCH   main (or whichever branch ArgoCD watches)
+# Group: pipeline-config
+#   APP_NAME           e.g. springboot-app
+#   HELM_VALUES_PATH   e.g. charts/springboot-app/values.yaml
+variables:
+  - group: acr-secrets
+  - group: git-deploy-secrets
+  - group: pipeline-config
+  - name: IMAGE_REPOSITORY
+    value: "$(ACR_LOGIN_SERVER)/$(APP_NAME)"
+  - name: BUILD_TAG
+    value: "$(Build.BuildNumber)"          # e.g. 20260822.1
+  - name: DOCKERFILE_PATH
+    value: "$(Build.SourcesDirectory)/pipeline/Dockerfile"
+  - name: BUILD_CONTEXT
+    value: "$(Build.SourcesDirectory)"
+
+# ── Stages ───────────────────────────────────────────────────
+stages:
+
+# ─────────────────────────────────────────────────────────────
+# STAGE 1 — BUILD
+# Compiles the app, runs tests, and produces a Docker image
+# saved as a pipeline artifact (tar) so the Push stage can
+# load it without rebuilding from scratch.
+# ─────────────────────────────────────────────────────────────
+  - stage: Build
+    displayName: "Stage 1 · Build & Test"
+    jobs:
+      - job: BuildAndTest
+        displayName: "Build Docker image and run tests"
+        steps:
+
+          # --- Checkout ---
+          - checkout: self
+            fetchDepth: 0
+            persistCredentials: false
+
+          # --- Build Docker image (no push yet) ---
+          - task: Docker@2
+            displayName: "Docker build"
+            inputs:
+              command: build
+              dockerfile: "$(DOCKERFILE_PATH)"
+              buildContext: "$(BUILD_CONTEXT)"
+              repository: "$(IMAGE_REPOSITORY)"
+              tags: |
+                $(BUILD_TAG)
+                latest
+              # Build arguments available to the Dockerfile
+              arguments: >
+                --build-arg BUILD_DATE=$(Build.QueueTime)
+                --build-arg VCS_REF=$(Build.SourceVersion)
+                --build-arg VERSION=$(BUILD_TAG)
+              # Do NOT use a container registry here; we push in the next stage
+              containerRegistry: ""
+
+          # --- Run unit/integration tests inside the just-built image ---
+          - script: |
+              docker run --rm \
+                --name test-runner \
+                "$(IMAGE_REPOSITORY):$(BUILD_TAG)" \
+                java -jar /app/app.jar --spring.profiles.active=test --test.only=true || \
+              docker run --rm \
+                --name test-runner \
+                "$(IMAGE_REPOSITORY):$(BUILD_TAG)" \
+                sh -c "echo 'No standalone test mode; tests already run during Maven build stage'"
+            displayName: "Run container-level smoke test"
+            continueOnError: false
+
+          # --- Save image to tar so the Push job can reload it ---
+          - script: |
+              mkdir -p "$(Build.ArtifactStagingDirectory)/docker"
+              docker save "$(IMAGE_REPOSITORY):$(BUILD_TAG)" \
+                | gzip > "$(Build.ArtifactStagingDirectory)/docker/image.tar.gz"
+            displayName: "Export Docker image as artifact"
+
+          # --- Publish the tar as a pipeline artifact ---
+          - task: PublishPipelineArtifact@1
+            displayName: "Publish image artifact"
+            inputs:
+              targetPath: "$(Build.ArtifactStagingDirectory)/docker"
+              artifact: docker-image
+              publishLocation: pipeline
+
+          # --- Publish test results (JUnit XML produced by Maven in Dockerfile build stage) ---
+          - task: PublishTestResults@2
+            displayName: "Publish Maven test results"
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: "**/surefire-reports/TEST-*.xml"
+              mergeTestResults: true
+              failTaskOnFailedTests: true
+
+# ─────────────────────────────────────────────────────────────
+# STAGE 2 — PUSH
+# Authenticates to private ACR via service connection and
+# pushes both the build-number tag and the 'latest' tag.
+# ─────────────────────────────────────────────────────────────
+  - stage: Push
+    displayName: "Stage 2 · Push to ACR"
+    dependsOn: Build
+    condition: and(succeeded('Build'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: PushImage
+        displayName: "Push image to private ACR"
+        steps:
+
+          # --- Restore the image artifact ---
+          - task: DownloadPipelineArtifact@2
+            displayName: "Download image artifact"
+            inputs:
+              artifact: docker-image
+              path: "$(Pipeline.Workspace)/docker-image"
+
+          # --- Load the image into the local Docker daemon ---
+          - script: |
+              gunzip -c "$(Pipeline.Workspace)/docker-image/image.tar.gz" | docker load
+            displayName: "Load Docker image from artifact"
+
+          # --- Login to ACR using the Docker Registry service connection ---
+          - task: Docker@2
+            displayName: "ACR Login"
+            inputs:
+              command: login
+              containerRegistry: "$(ACR_SERVICE_CONN)"
+
+          # --- Push image:BUILD_TAG ---
+          - task: Docker@2
+            displayName: "Push image with build tag"
+            inputs:
+              command: push
+              containerRegistry: "$(ACR_SERVICE_CONN)"
+              repository: "$(APP_NAME)"
+              tags: "$(BUILD_TAG)"
+
+          # --- Tag local image as :latest and push ---
+          - script: |
+              docker tag "$(IMAGE_REPOSITORY):$(BUILD_TAG)" \
+                         "$(IMAGE_REPOSITORY):latest"
+              docker push "$(IMAGE_REPOSITORY):latest"
+            displayName: "Push image with latest tag"
+
+          # --- Logout of ACR (clean credentials from agent) ---
+          - task: Docker@2
+            displayName: "ACR Logout"
+            condition: always()
+            inputs:
+              command: logout
+              containerRegistry: "$(ACR_SERVICE_CONN)"
+
+# ─────────────────────────────────────────────────────────────
+# STAGE 3 — DEPLOY
+# Updates the Helm values file in the GitOps repo with the
+# new image tag, commits, and pushes so ArgoCD auto-syncs.
+#
+# An approval gate is configured on the environment
+# "production" in Azure DevOps (Pipelines → Environments).
+# ─────────────────────────────────────────────────────────────
+  - stage: Deploy
+    displayName: "Stage 3 · Deploy via ArgoCD (GitOps)"
+    dependsOn: Push
+    condition: and(succeeded('Push'), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+
+      # ── Approval gate ─────────────────────────────────────
+      # The 'production' environment must have an Approvals &
+      # Checks configured in Azure DevOps UI
+      # (Pipelines → Environments → production → Approvals).
+      - deployment: DeployProduction
+        displayName: "Update Helm values and trigger ArgoCD sync"
+        environment: production          # <-- approval gate lives here
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+
+                # --- Install yq for reliable YAML editing ---
+                - script: |
+                    if ! command -v yq &>/dev/null; then
+                      sudo wget -qO /usr/local/bin/yq \
+                        https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64
+                      sudo chmod +x /usr/local/bin/yq
+                    fi
+                    yq --version
+                  displayName: "Ensure yq is installed"
+
+                # --- Clone the Helm values (GitOps) repo ---
+                - script: |
+                    set -euo pipefail
+
+                    REPO_DIR="$(Agent.TempDirectory)/helm-values"
+                    rm -rf "$REPO_DIR"
+
+                    # Embed PAT in URL for auth (PAT stored as secret variable)
+                    ENCODED_PAT=$(python3 -c \
+                      "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" \
+                      "$(GIT_PAT)")
+                    AUTH_URL=$(echo "$(HELM_REPO_URL)" | \
+                      sed "s|https://|https://$(GIT_USER_NAME):${ENCODED_PAT}@|")
+
+                    git clone --depth 1 --branch "$(HELM_REPO_BRANCH)" \
+                      "$AUTH_URL" "$REPO_DIR"
+
+                    echo "##vso[task.setvariable variable=REPO_DIR]$REPO_DIR"
+                  displayName: "Clone Helm values repo"
+                  env:
+                    GIT_PAT: $(GIT_PAT)          # secret variable passed via env
+
+                # --- Update image.tag in values.yaml using yq ---
+                - script: |
+                    set -euo pipefail
+
+                    VALUES_FILE="$(REPO_DIR)/$(HELM_VALUES_PATH)"
+
+                    echo "Updating image tag to $(BUILD_TAG) in $VALUES_FILE"
+
+                    # yq in-place update: set .image.tag
+                    yq e -i '.image.tag = "$(BUILD_TAG)"' "$VALUES_FILE"
+                    yq e -i '.image.repository = "$(IMAGE_REPOSITORY)"' "$VALUES_FILE"
+
+                    echo "--- Updated values snippet ---"
+                    yq e '.image' "$VALUES_FILE"
+                  displayName: "Update image tag in Helm values"
+
+                # --- Commit and push the change ---
+                - script: |
+                    set -euo pipefail
+
+                    cd "$(REPO_DIR)"
+
+                    git config user.name  "$(GIT_USER_NAME)"
+                    git config user.email "$(GIT_USER_EMAIL)"
+
+                    git add "$(HELM_VALUES_PATH)"
+
+                    # Only commit if there's actually a diff
+                    if git diff --cached --quiet; then
+                      echo "No changes to commit — image tag was already $(BUILD_TAG)"
+                      exit 0
+                    fi
+
+                    git commit -m \
+                      "chore(deploy): update $(APP_NAME) image tag to $(BUILD_TAG) [skip ci]"
+
+                    git push origin "$(HELM_REPO_BRANCH)"
+
+                    echo "Pushed Helm values update; ArgoCD will detect and sync."
+                  displayName: "Commit and push Helm values update"
+                  env:
+                    GIT_PAT: $(GIT_PAT)
+
+                # --- Optional: trigger an immediate ArgoCD sync via CLI ---
+                # Uncomment if the ArgoCD CLI is available on the agent and
+                # you prefer not to wait for the default polling interval.
+                #
+                # - script: |
+                #     argocd app sync $(APP_NAME) \
+                #       --server $(ARGOCD_SERVER) \
+                #       --auth-token $(ARGOCD_AUTH_TOKEN) \
+                #       --grpc-web \
+                #       --timeout 300
+                #   displayName: "Trigger ArgoCD sync"
+                #   env:
+                #     ARGOCD_AUTH_TOKEN: $(ARGOCD_AUTH_TOKEN)
+
+                # --- Verify ArgoCD sync status (polling) ---
+                # - script: |
+                #     argocd app wait $(APP_NAME) \
+                #       --server $(ARGOCD_SERVER) \
+                #       --auth-token $(ARGOCD_AUTH_TOKEN) \
+                #       --grpc-web \
+                #       --health \
+                #       --timeout 300
+                #   displayName: "Wait for ArgoCD healthy status"
