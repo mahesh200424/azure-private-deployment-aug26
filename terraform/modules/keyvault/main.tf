@@ -34,9 +34,9 @@ resource "azurerm_key_vault" "main" {
   enable_rbac_authorization = true
 
   network_acls {
-    bypass         = "AzureServices"
-    default_action = "Deny"
-    ip_rules       = []
+    bypass                     = "AzureServices"
+    default_action             = "Deny"
+    ip_rules                   = []
     virtual_network_subnet_ids = []
   }
 

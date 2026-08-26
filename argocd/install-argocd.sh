@@ -6,7 +6,7 @@
 #
 # Usage:
 #   chmod +x install-argocd.sh
-#   ./install-argocd.sh [--context <kubeconfig-context>] [--skip-rollouts]
+#   ./install-argocd.sh [--context <kubeconfig-context>] [--with-rollouts]
 #
 # Prerequisites:
 #   - kubectl configured and pointing at the target AKS cluster
@@ -47,7 +47,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Argument parsing
 # -----------------------------------------------------------------------------
 KUBE_CONTEXT=""
-SKIP_ROLLOUTS=false
+SKIP_ROLLOUTS=true
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -60,12 +60,16 @@ while [[ $# -gt 0 ]]; do
       SKIP_ROLLOUTS=true
       shift
       ;;
+    --with-rollouts)
+      SKIP_ROLLOUTS=false
+      shift
+      ;;
     --dry-run)
       DRY_RUN=true
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--context <ctx>] [--skip-rollouts] [--dry-run]"
+      echo "Usage: $0 [--context <ctx>] [--with-rollouts] [--dry-run]"
       exit 0
       ;;
     *)
@@ -312,21 +316,10 @@ else
   warn "application.yaml not found at $SCRIPT_DIR/application.yaml — skipping."
 fi
 
-# Apply Rollout manifests (if the myapp namespace is ready)
-if [[ -f "$SCRIPT_DIR/blue-green-rollout.yaml" ]]; then
-  info "Applying blue-green Rollout, Services, HPA, and PDB..."
-  kubectl apply -f "$SCRIPT_DIR/blue-green-rollout.yaml" \
-    -n myapp $KUBECTL_DRY
-  success "Rollout manifest applied."
-fi
-
-# Apply AnalysisTemplate
-if [[ -f "$SCRIPT_DIR/analysis-template.yaml" ]]; then
-  info "Applying AnalysisTemplate..."
-  kubectl apply -f "$SCRIPT_DIR/analysis-template.yaml" \
-    -n myapp $KUBECTL_DRY
-  success "AnalysisTemplate applied."
-fi
+# The Helm chart is the single owner of myapp workloads. Do not apply the
+# legacy Rollout manifests here: they define the same Services and would cause
+# ArgoCD to report shared-resource conflicts.
+info "Skipping legacy Argo Rollouts manifests; Helm chart owns the workload."
 
 # =============================================================================
 # STEP 7 — Retrieve initial admin password

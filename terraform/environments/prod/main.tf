@@ -12,7 +12,6 @@ terraform {
     }
   }
 
-  backend "azurerm" {}
 }
 
 provider "azurerm" {
@@ -65,13 +64,13 @@ module "acr" {
 module "keyvault" {
   source = "../../modules/keyvault"
 
-  location                 = var.location
-  resource_group_name      = module.networking.resource_group_name
-  environment              = var.environment
-  keyvault_name            = var.keyvault_name
-  pe_subnet_id             = module.networking.pe_subnet_id
-  vnet_id                  = module.networking.vnet_id
-  aks_kubelet_identity_id  = module.aks.kubelet_identity_object_id
+  location                = var.location
+  resource_group_name     = module.networking.resource_group_name
+  environment             = var.environment
+  keyvault_name           = var.keyvault_name
+  pe_subnet_id            = module.networking.pe_subnet_id
+  vnet_id                 = module.networking.vnet_id
+  aks_kubelet_identity_id = module.aks.kubelet_identity_object_id
 
   depends_on = [module.networking, module.aks]
 }

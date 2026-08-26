@@ -15,7 +15,7 @@ ARG VERSION="unknown"
 # Full Maven + JDK image; produces the executable JAR.
 # Nothing from this stage leaks into the final image.
 # =============================================================
-FROM maven:3.9-eclipse-temurin-17 AS builder
+FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-17 AS builder
 
 WORKDIR /build
 
@@ -45,7 +45,7 @@ RUN mvn package \
 # included.  The Maven cache, sources, and build tools are left
 # behind in the builder stage.
 # =============================================================
-FROM eclipse-temurin:17-jre-alpine AS runtime
+FROM eclipse-temurin:17-jre-jammy AS runtime
 
 # ── Re-declare build args so they are available in this stage ─
 ARG BUILD_DATE
@@ -65,20 +65,18 @@ LABEL org.opencontainers.image.title="springboot-app" \
 # ── Install only what the runtime needs ──────────────────────
 # curl  → used by the HEALTHCHECK command
 # tini  → init process: reaps zombie processes and forwards signals
-RUN apk add --no-cache \
-      curl=8.11.0-r2 \
-      tini=0.19.0-r3 \
-  && rm -rf /var/cache/apk/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      tini \
+  && rm -rf /var/lib/apt/lists/*
 
 # ── Create a dedicated non-root user and group ───────────────
-# UID/GID 1001 is a conventional non-privileged range outside
-# the OS-managed space (1–999).
-RUN addgroup --system --gid 1001 appgroup \
-  && adduser  --system --uid 1001 \
-              --ingroup appgroup \
-              --no-create-home \
-              --shell /sbin/nologin \
-              appuser
+RUN groupadd --system --gid 1001 appgroup \
+  && useradd --system --uid 1001 \
+             --gid appgroup \
+             --no-create-home \
+             --shell /sbin/nologin \
+             appuser
 
 # ── Application directory ────────────────────────────────────
 WORKDIR /app
@@ -120,5 +118,5 @@ HEALTHCHECK \
 # ── Entry point ───────────────────────────────────────────────
 # tini wraps the JVM so signals (SIGTERM) are handled properly
 # and zombie processes are reaped.
-ENTRYPOINT ["/sbin/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]

@@ -22,7 +22,7 @@ spec:
   # Source repository configuration
   source:
     repoURL: https://github.com/your-org/your-repo.git  # TODO: Replace with your Git repo URL
-    targetRevision: HEAD
+    targetRevision: main
     path: helm/myapp
 
     # Helm-specific configuration
@@ -30,107 +30,10 @@ spec:
       # Release name override (defaults to app name if omitted)
       releaseName: myapp
 
-      # Values files to layer (applied in order, later files take precedence)
+      # All production settings live in the chart, so the deployment pipeline
+      # can update this tracked file without being overridden by inline values.
       valueFiles:
         - values.yaml
-        - values-production.yaml
-
-      # Inline values override (highest precedence, merged on top of valueFiles)
-      values: |
-        replicaCount: 3
-
-        image:
-          repository: your-registry.azurecr.io/myapp  # TODO: Replace with your ACR
-          tag: ""  # Managed by ArgoCD image updater or CI/CD pipeline
-          pullPolicy: IfNotPresent
-
-        # Blue-green deployment via Argo Rollouts
-        rollout:
-          enabled: true
-          strategy: blueGreen
-
-        service:
-          active:
-            name: myapp-active
-            port: 80
-            targetPort: 8080
-          preview:
-            name: myapp-preview
-            port: 80
-            targetPort: 8080
-
-        ingress:
-          enabled: true
-          className: nginx
-          annotations:
-            kubernetes.io/ingress.class: nginx
-            nginx.ingress.kubernetes.io/ssl-redirect: "true"
-            cert-manager.io/cluster-issuer: letsencrypt-prod
-          hosts:
-            - host: myapp.example.com  # TODO: Replace with your domain
-              paths:
-                - path: /
-                  pathType: Prefix
-          tls:
-            - secretName: myapp-tls
-              hosts:
-                - myapp.example.com
-
-        resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 500m
-            memory: 512Mi
-
-        autoscaling:
-          enabled: true
-          minReplicas: 3
-          maxReplicas: 10
-          targetCPUUtilizationPercentage: 70
-          targetMemoryUtilizationPercentage: 80
-
-        podDisruptionBudget:
-          enabled: true
-          minAvailable: 2
-
-        serviceAccount:
-          create: true
-          annotations:
-            azure.workload.identity/client-id: ""  # TODO: Add Azure workload identity client ID
-
-        podAnnotations:
-          prometheus.io/scrape: "true"
-          prometheus.io/port: "8080"
-          prometheus.io/path: "/metrics"
-
-        # Azure-specific node selection
-        nodeSelector:
-          kubernetes.io/os: linux
-          agentpool: default
-
-        tolerations: []
-
-        affinity:
-          podAntiAffinity:
-            preferredDuringSchedulingIgnoredDuringExecution:
-              - weight: 100
-                podAffinityTerm:
-                  labelSelector:
-                    matchExpressions:
-                      - key: app.kubernetes.io/name
-                        operator: In
-                        values:
-                          - myapp
-                  topologyKey: kubernetes.io/hostname
-
-      # Pass additional parameters as --set flags
-      parameters:
-        - name: global.environment
-          value: production
-        - name: global.region
-          value: eastus  # TODO: Replace with your Azure region
 
   # Destination cluster and namespace
   destination:

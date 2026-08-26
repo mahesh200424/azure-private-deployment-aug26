@@ -81,12 +81,12 @@ resource "azurerm_role_assignment" "kubelet_acrpull" {
 # AKS Cluster
 # ─────────────────────────────────────────────────────────────
 resource "azurerm_kubernetes_cluster" "main" {
-  name                      = local.cluster_name
-  location                  = var.location
-  resource_group_name       = var.resource_group_name
+  name                       = local.cluster_name
+  location                   = var.location
+  resource_group_name        = var.resource_group_name
   dns_prefix_private_cluster = var.dns_prefix
-  kubernetes_version        = var.kubernetes_version
-  node_resource_group       = "rg-${local.cluster_name}-nodes"
+  kubernetes_version         = var.kubernetes_version
+  node_resource_group        = "rg-${local.cluster_name}-nodes"
 
   # ── Private cluster ──────────────────────────────────────
   private_cluster_enabled             = true
@@ -137,12 +137,12 @@ resource "azurerm_kubernetes_cluster" "main" {
 
   # ── Azure CNI networking ─────────────────────────────────
   network_profile {
-    network_plugin     = "azure"
-    network_policy     = "calico"
-    load_balancer_sku  = "standard"
-    outbound_type      = "userAssignedNATGateway"
-    service_cidr       = "172.16.0.0/16"
-    dns_service_ip     = "172.16.0.10"
+    network_plugin    = "azure"
+    network_policy    = "calico"
+    load_balancer_sku = "standard"
+    outbound_type     = "userAssignedNATGateway"
+    service_cidr      = "172.16.0.0/16"
+    dns_service_ip    = "172.16.0.10"
   }
 
   # ── Azure Monitor / Insights ─────────────────────────────
@@ -158,8 +158,8 @@ resource "azurerm_kubernetes_cluster" "main" {
 
   # ── Azure AD / RBAC ──────────────────────────────────────
   azure_active_directory_role_based_access_control {
-    managed                = true
-    azure_rbac_enabled     = true
+    managed            = true
+    azure_rbac_enabled = true
   }
 
   # ── Auto-upgrade ─────────────────────────────────────────

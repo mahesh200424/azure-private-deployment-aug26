@@ -98,9 +98,14 @@ podDisruptionBudget:
   minAvailable: 1
   # maxUnavailable: 1  # use either minAvailable or maxUnavailable, not both
 
-nodeSelector: {}
+nodeSelector:
+  nodepool-type: user
 
-tolerations: []
+tolerations:
+  - key: workload
+    operator: Equal
+    value: user
+    effect: NoSchedule
 
 affinity:
   podAntiAffinity:

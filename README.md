@@ -69,8 +69,8 @@ azure-private-deployment/
 │   ├── install-argocd.sh        # Bootstrap script
 │   ├── project.yaml             # ArgoCD AppProject
 │   ├── application.yaml         # ArgoCD Application
-│   ├── blue-green-rollout.yaml  # Argo Rollouts Rollout resource
-│   └── analysis-template.yaml  # Prometheus-based analysis
+│   ├── blue-green-rollout.yaml  # Legacy example; not applied by bootstrap
+│   └── analysis-template.yaml   # Legacy example; not applied by bootstrap
 └── README.md
 ```
 
@@ -247,7 +247,7 @@ keyVault:
 
 ---
 
-## Step 6 — Install ArgoCD and Argo Rollouts
+## Step 6 — Install ArgoCD
 
 ```bash
 cd argocd
@@ -260,9 +260,8 @@ chmod +x install-argocd.sh
 The script:
 1. Creates `argocd` namespace
 2. Installs ArgoCD via Helm (internal LoadBalancer)
-3. Installs Argo Rollouts + kubectl plugin
-4. Applies AppProject and Application manifests
-5. Prints the initial admin password
+3. Applies AppProject and Application manifests
+4. Prints the initial admin password
 
 ---
 
@@ -340,8 +339,8 @@ In Azure DevOps → Pipelines → Environments → `production`:
 ```
 Git push → Azure DevOps builds image → Pushes to ACR (private)
        → Updates Helm values (image tag) → ArgoCD detects change
-       → Argo Rollouts deploys to inactive slot → Analysis runs
-       → Manual promotion → Active service switches → Old slot scales down
+       → Helm updates the blue and green Deployments
+       → Operator switches the active service selector after verification
 ```
 
 ### Traffic flow
@@ -353,21 +352,12 @@ Ingress → myapp-active Service
               └── (activeSlot=green) → Green Deployment (v2.0)
 ```
 
-### Performing a deployment
+### Verify and switch a deployment
 
 ```bash
-# 1. Check current rollout status
-kubectl argo rollouts get rollout myapp -n myapp --watch
-
-# 2. After pipeline runs, new version is in preview slot
-# Check preview
-kubectl argo rollouts get rollout myapp -n myapp
-
-# 3. Promote to active (after analysis passes)
-kubectl argo rollouts promote myapp -n myapp
-
-# 4. Rollback if needed
-kubectl argo rollouts undo myapp -n myapp
+# Check both slots and the active Service selector
+kubectl get deployments,services -n myapp
+kubectl get endpoints myapp-active -n myapp
 ```
 
 ### Switching active slot via Helm (manual override)
@@ -504,14 +494,8 @@ terraform destroy
 ## Quick Reference
 
 ```bash
-# Check rollout
-kubectl argo rollouts get rollout myapp -n myapp
-
-# Promote blue-green
-kubectl argo rollouts promote myapp -n myapp
-
-# Rollback
-kubectl argo rollouts undo myapp -n myapp
+# Check blue/green Deployments and active Service
+kubectl get deployments,services,endpoints -n myapp
 
 # ArgoCD sync
 argocd app sync myapp
