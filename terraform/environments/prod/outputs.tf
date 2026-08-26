@@ -17,3 +17,13 @@ output "vnet_id" {
   description = "Resource ID of the Virtual Network."
   value       = module.networking.vnet_id
 }
+
+output "workload_identity_client_id" {
+  description = "Set this value on the myapp ServiceAccount annotation."
+  value       = module.workload_identity.client_id
+}
+
+output "agent_vm_name" {
+  description = "Private VM that must be registered in Azure DevOps private-vnet-pool."
+  value       = module.azure_devops_agent.vm_name
+}

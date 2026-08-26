@@ -40,6 +40,7 @@ module "networking" {
   vnet_address_space  = var.vnet_address_space
   aks_subnet_cidr     = var.aks_subnet_cidr
   pe_subnet_cidr      = var.pe_subnet_cidr
+  agent_subnet_cidr   = var.agent_subnet_cidr
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -54,25 +55,23 @@ module "acr" {
   acr_name            = var.acr_name
   pe_subnet_id        = module.networking.pe_subnet_id
   vnet_id             = module.networking.vnet_id
+  push_principal_id   = module.azure_devops_agent.principal_id
 
-  depends_on = [module.networking]
+  depends_on = [module.networking, module.azure_devops_agent]
 }
 
 # ─────────────────────────────────────────────────────────────
-# Key Vault
+# Dedicated workload identity
 # ─────────────────────────────────────────────────────────────
-module "keyvault" {
-  source = "../../modules/keyvault"
+module "workload_identity" {
+  source = "../../modules/workload_identity"
 
-  location                = var.location
-  resource_group_name     = module.networking.resource_group_name
-  environment             = var.environment
-  keyvault_name           = var.keyvault_name
-  pe_subnet_id            = module.networking.pe_subnet_id
-  vnet_id                 = module.networking.vnet_id
-  aks_kubelet_identity_id = module.aks.kubelet_identity_object_id
+  location            = var.location
+  resource_group_name = module.networking.resource_group_name
+  environment         = var.environment
+  oidc_issuer_url     = module.aks.oidc_issuer_url
 
-  depends_on = [module.networking, module.aks]
+  depends_on = [module.aks]
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -91,4 +90,38 @@ module "aks" {
   dns_prefix          = "${var.environment}-aks"
 
   depends_on = [module.networking, module.acr]
+}
+
+# ─────────────────────────────────────────────────────────────
+# Key Vault
+# ─────────────────────────────────────────────────────────────
+module "keyvault" {
+  source = "../../modules/keyvault"
+
+  location                       = var.location
+  resource_group_name            = module.networking.resource_group_name
+  environment                    = var.environment
+  keyvault_name                  = var.keyvault_name
+  pe_subnet_id                   = module.networking.pe_subnet_id
+  vnet_id                        = module.networking.vnet_id
+  workload_identity_principal_id = module.workload_identity.principal_id
+
+  depends_on = [module.networking, module.workload_identity]
+}
+
+# ─────────────────────────────────────────────────────────────
+# Private Azure DevOps agent host
+# ─────────────────────────────────────────────────────────────
+module "azure_devops_agent" {
+  source = "../../modules/azure_devops_agent"
+
+  location             = var.location
+  resource_group_name  = module.networking.resource_group_name
+  environment          = var.environment
+  subnet_id            = module.networking.agent_subnet_id
+  admin_username       = var.agent_admin_username
+  admin_ssh_public_key = var.agent_admin_ssh_public_key
+  vm_size              = var.agent_vm_size
+
+  depends_on = [module.networking]
 }

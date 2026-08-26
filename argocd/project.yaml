@@ -18,7 +18,7 @@ spec:
   # -----------------------------------------------------------------------
   sourceRepos:
     # Primary application GitOps repository
-    - https://github.com/your-org/your-repo.git        # TODO: Replace with your repo
+    - https://github.com/mahesh200424/azure-private-deployment-aug26.git
     # Helm chart repositories (if using external charts)
     - https://charts.bitnami.com/bitnami
     - https://prometheus-community.github.io/helm-charts

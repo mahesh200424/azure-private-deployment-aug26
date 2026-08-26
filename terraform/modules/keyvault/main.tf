@@ -34,7 +34,7 @@ resource "azurerm_key_vault" "main" {
   enable_rbac_authorization = true
 
   network_acls {
-    bypass                     = "AzureServices"
+    bypass                     = "None"
     default_action             = "Deny"
     ip_rules                   = []
     virtual_network_subnet_ids = []
@@ -85,25 +85,14 @@ resource "azurerm_private_endpoint" "keyvault" {
 }
 
 # ─────────────────────────────────────────────────────────────
-# RBAC — Grant AKS kubelet identity 'Key Vault Secrets User'
-# This allows the Secrets Store CSI driver to read secrets.
+# RBAC — grant only the dedicated workload identity 'Key Vault Secrets User'.
+# The federated credential is bound to system:serviceaccount:myapp:myapp.
 # ─────────────────────────────────────────────────────────────
-resource "azurerm_role_assignment" "aks_kubelet_kv_secrets_user" {
+resource "azurerm_role_assignment" "myapp_kv_secrets_user" {
   scope                = azurerm_key_vault.main.id
   role_definition_name = "Key Vault Secrets User"
-  principal_id         = var.aks_kubelet_identity_id
+  principal_id         = var.workload_identity_principal_id
 
   # Avoid duplicate role assignment errors on re-apply
   skip_service_principal_aad_check = true
-}
-
-# ─────────────────────────────────────────────────────────────
-# RBAC — Grant the Terraform caller 'Key Vault Administrator'
-# so it can manage secrets during bootstrapping.
-# Remove or restrict this in day-2 operations.
-# ─────────────────────────────────────────────────────────────
-resource "azurerm_role_assignment" "terraform_kv_admin" {
-  scope                = azurerm_key_vault.main.id
-  role_definition_name = "Key Vault Administrator"
-  principal_id         = data.azurerm_client_config.current.object_id
 }

@@ -28,7 +28,7 @@ variable "vnet_id" {
   type        = string
 }
 
-variable "aks_kubelet_identity_id" {
-  description = "Object ID of the AKS kubelet managed identity. Granted 'Key Vault Secrets User'."
+variable "workload_identity_principal_id" {
+  description = "Principal ID of the dedicated myapp workload identity. Granted 'Key Vault Secrets User'."
   type        = string
 }

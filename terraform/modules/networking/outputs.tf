@@ -28,6 +28,11 @@ output "pe_subnet_id" {
   value       = azurerm_subnet.pe.id
 }
 
+output "agent_subnet_id" {
+  description = "Resource ID of the private Azure DevOps agent subnet."
+  value       = azurerm_subnet.agent.id
+}
+
 output "nat_gateway_id" {
   description = "Resource ID of the NAT Gateway."
   value       = azurerm_nat_gateway.main.id

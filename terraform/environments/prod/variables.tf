@@ -69,3 +69,26 @@ variable "pe_subnet_cidr" {
   type        = string
   default     = "10.2.0.0/24"
 }
+
+variable "agent_subnet_cidr" {
+  description = "CIDR block for the private Azure DevOps agent subnet."
+  type        = string
+  default     = "10.3.0.0/24"
+}
+
+variable "agent_admin_username" {
+  description = "Linux administrator name for the private Azure DevOps agent VM."
+  type        = string
+  default     = "azureuser"
+}
+
+variable "agent_admin_ssh_public_key" {
+  description = "SSH public key for break-glass administration of the private agent VM."
+  type        = string
+}
+
+variable "agent_vm_size" {
+  description = "Temporary private Azure DevOps agent VM size."
+  type        = string
+  default     = "Standard_B2s"
+}

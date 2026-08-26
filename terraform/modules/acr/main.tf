@@ -51,6 +51,12 @@ resource "azurerm_container_registry" "main" {
   tags = local.common_tags
 }
 
+resource "azurerm_role_assignment" "agent_acr_push" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPush"
+  principal_id         = var.push_principal_id
+}
+
 # ─────────────────────────────────────────────────────────────
 # Private DNS Zone — privatelink.azurecr.io
 # ─────────────────────────────────────────────────────────────

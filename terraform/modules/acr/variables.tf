@@ -27,3 +27,8 @@ variable "vnet_id" {
   description = "Resource ID of the Virtual Network to link the private DNS zone to."
   type        = string
 }
+
+variable "push_principal_id" {
+  description = "Principal ID of the private Azure DevOps agent managed identity, granted AcrPush only on this registry."
+  type        = string
+}

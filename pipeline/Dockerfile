@@ -27,14 +27,12 @@ RUN mvn dependency:go-offline --no-transfer-progress -q
 # ── Copy source and build ─────────────────────────────────────
 COPY src ./src
 
-# Run full build including tests.
-# -DskipTests=false is the default; stated explicitly for clarity.
-# Surefire XML reports land in target/surefire-reports/ and are
-# published by the pipeline's PublishTestResults task.
+# Unit tests run in the pipeline workspace before this image build, so their
+# JUnit XML is available to Azure DevOps. Keep this image build deterministic
+# and avoid running a second hidden test pass inside a discarded layer.
 RUN mvn package \
       --no-transfer-progress \
-      -DskipTests=false \
-      -Dmaven.test.failure.ignore=false \
+      -DskipTests \
   && echo "Build successful" \
   # Rename the fat JAR to a predictable name, stripping the version suffix
   && cp target/*.jar target/app.jar

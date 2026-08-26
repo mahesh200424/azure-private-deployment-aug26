@@ -1,0 +1,17 @@
+#cloud-config
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - docker.io
+  - git
+  - jq
+  - unzip
+runcmd:
+  - usermod -aG docker ${admin_username}
+  - systemctl enable --now docker
+  - curl -fsSL https://aka.ms/InstallAzureCLIDeb | bash
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/usr/share/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' > /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update && apt-get install -y kubectl
+  - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

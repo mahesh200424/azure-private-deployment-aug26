@@ -21,7 +21,7 @@ spec:
 
   # Source repository configuration
   source:
-    repoURL: https://github.com/your-org/your-repo.git  # TODO: Replace with your Git repo URL
+    repoURL: https://github.com/mahesh200424/azure-private-deployment-aug26.git
     targetRevision: main
     path: helm/myapp
 
@@ -76,6 +76,12 @@ spec:
   # Fields to ignore when comparing live state with desired state
   # Prevents unnecessary sync triggers for fields managed by other controllers
   ignoreDifferences:
+    # Argo Rollouts adds this selector to the active and preview Services.
+    # RespectIgnoreDifferences prevents ArgoCD self-heal from undoing a promotion.
+    - group: ""
+      kind: Service
+      jsonPointers:
+        - /spec/selector/rollouts-pod-template-hash
     # Ignore replicas managed by HPA
     - group: apps
       kind: Deployment

@@ -1,51 +1,7 @@
 {{- if .Values.blueGreen.enabled }}
 ---
-# Blue slot service — always routes to blue pods
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "myapp.fullname" . }}-blue
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "myapp.labels" . | nindent 4 }}
-    app.kubernetes.io/slot: blue
-  annotations:
-    service.kubernetes.io/slot: blue
-spec:
-  type: {{ .Values.service.type }}
-  ports:
-    - name: http
-      port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
-      protocol: TCP
-  selector:
-    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" "blue") | nindent 4 }}
-
----
-# Green slot service — always routes to green pods
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "myapp.fullname" . }}-green
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "myapp.labels" . | nindent 4 }}
-    app.kubernetes.io/slot: green
-  annotations:
-    service.kubernetes.io/slot: green
-spec:
-  type: {{ .Values.service.type }}
-  ports:
-    - name: http
-      port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
-      protocol: TCP
-  selector:
-    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" "green") | nindent 4 }}
-
----
-# Active service — selector switches based on blueGreen.activeSlot value.
-# To cut over traffic: helm upgrade --set blueGreen.activeSlot=green
+# Argo Rollouts owns the `rollouts-pod-template-hash` selector on these
+# services. Do not switch selectors with Helm: promotion is controller-owned.
 apiVersion: v1
 kind: Service
 metadata:
@@ -53,10 +9,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "myapp.labels" . | nindent 4 }}
-    app.kubernetes.io/slot: {{ .Values.blueGreen.activeSlot }}
     app.kubernetes.io/active: "true"
-  annotations:
-    service.kubernetes.io/active-slot: {{ .Values.blueGreen.activeSlot }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -65,7 +18,27 @@ spec:
       targetPort: {{ .Values.service.targetPort }}
       protocol: TCP
   selector:
-    {{- include "myapp.slotSelectorLabels" (dict "root" . "slot" .Values.blueGreen.activeSlot) | nindent 4 }}
+    {{- include "myapp.selectorLabels" . | nindent 4 }}
+
+---
+# Preview traffic is isolated here until `kubectl argo rollouts promote`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "myapp.fullname" . }}-preview
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "myapp.labels" . | nindent 4 }}
+    app.kubernetes.io/preview: "true"
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+  selector:
+    {{- include "myapp.selectorLabels" . | nindent 4 }}
 
 {{- else }}
 ---

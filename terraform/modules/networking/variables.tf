@@ -27,3 +27,8 @@ variable "pe_subnet_cidr" {
   description = "CIDR block for the Private Endpoints subnet."
   type        = string
 }
+
+variable "agent_subnet_cidr" {
+  description = "CIDR block for the private Azure DevOps agent subnet."
+  type        = string
+}

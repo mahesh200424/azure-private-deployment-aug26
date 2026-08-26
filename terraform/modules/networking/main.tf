@@ -143,7 +143,62 @@ resource "azurerm_network_security_group" "pe" {
     destination_address_prefix = var.pe_subnet_cidr
   }
 
+  security_rule {
+    name                       = "AllowAgentToPrivateEndpoints"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = var.agent_subnet_cidr
+    destination_address_prefix = var.pe_subnet_cidr
+  }
+
   # Deny all other inbound
+  security_rule {
+    name                       = "DenyAllInBound"
+    priority                   = 4096
+    direction                  = "Inbound"
+    access                     = "Deny"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_security_group" "agent" {
+  name                = "nsg-agent-${local.name_prefix}"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  tags                = local.common_tags
+
+  security_rule {
+    name                       = "AllowVnetOutBound"
+    priority                   = 100
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "*"
+    source_port_range          = "*"
+    destination_port_range     = "*"
+    source_address_prefix      = "VirtualNetwork"
+    destination_address_prefix = "VirtualNetwork"
+  }
+
+  security_rule {
+    name                       = "AllowHttpsInternetOutBound"
+    priority                   = 110
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "443"
+    source_address_prefix      = "*"
+    destination_address_prefix = "Internet"
+  }
+
   security_rule {
     name                       = "DenyAllInBound"
     priority                   = 4096
@@ -191,6 +246,18 @@ resource "azurerm_subnet_network_security_group_association" "pe" {
   network_security_group_id = azurerm_network_security_group.pe.id
 }
 
+resource "azurerm_subnet" "agent" {
+  name                 = "snet-agent-${local.name_prefix}"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = [var.agent_subnet_cidr]
+}
+
+resource "azurerm_subnet_network_security_group_association" "agent" {
+  subnet_id                 = azurerm_subnet.agent.id
+  network_security_group_id = azurerm_network_security_group.agent.id
+}
+
 # ─────────────────────────────────────────────────────────────
 # NAT Gateway — deterministic egress for AKS nodes
 # ─────────────────────────────────────────────────────────────
@@ -221,5 +288,10 @@ resource "azurerm_nat_gateway_public_ip_association" "main" {
 
 resource "azurerm_subnet_nat_gateway_association" "aks" {
   subnet_id      = azurerm_subnet.aks.id
+  nat_gateway_id = azurerm_nat_gateway.main.id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "agent" {
+  subnet_id      = azurerm_subnet.agent.id
   nat_gateway_id = azurerm_nat_gateway.main.id
 }

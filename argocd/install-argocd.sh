@@ -47,7 +47,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Argument parsing
 # -----------------------------------------------------------------------------
 KUBE_CONTEXT=""
-SKIP_ROLLOUTS=true
+SKIP_ROLLOUTS=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -h|--help)
-      echo "Usage: $0 [--context <ctx>] [--with-rollouts] [--dry-run]"
+      echo "Usage: $0 [--context <ctx>] [--skip-rollouts] [--dry-run]"
       exit 0
       ;;
     *)
@@ -157,8 +157,6 @@ helm "$HELM_CMD" argocd argo/argo-cd \
   --version "${ARGOCD_VERSION#v}" \
   --set global.image.tag="$ARGOCD_VERSION" \
   --set server.service.type=ClusterIP \
-  --set server.extraArgs[0]="--insecure" \
-  --set configs.params."server\.insecure"=true \
   --set server.metrics.enabled=true \
   --set controller.metrics.enabled=true \
   --set repoServer.metrics.enabled=true \
@@ -347,7 +345,8 @@ if [[ "$DRY_RUN" == "false" ]]; then
     echo ""
     if [[ -n "${LB_IP:-}" ]]; then
       echo "  UI URL   : https://$LB_IP"
-      echo "  Login    : argocd login $LB_IP --username admin --password '$ADMIN_PASSWORD' --insecure"
+      echo "  Login    : argocd login $LB_IP --username admin --password '<password>'"
+      echo "  Note     : configure a private DNS name and trusted TLS certificate before routine use."
     fi
     echo "================================================================="
     echo ""
