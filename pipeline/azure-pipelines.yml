@@ -134,7 +134,7 @@ stages:
                 - script: |
                     set -euo pipefail
                     export BUILD_TAG="$(BUILD_TAG)"
-                    docker run --rm -e BUILD_TAG \
+                    docker run --rm --user "$(id -u):$(id -g)" -e BUILD_TAG \
                       -v "$(Build.SourcesDirectory):/work" -w /work \
                       mikefarah/yq:4.44.3 \
                       -i '.image.tag = strenv(BUILD_TAG)' helm/myapp/values.yaml
