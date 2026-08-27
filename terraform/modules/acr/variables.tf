@@ -29,6 +29,8 @@ variable "vnet_id" {
 }
 
 variable "push_principal_id" {
-  description = "Principal ID of the private Azure DevOps agent managed identity, granted AcrPush only on this registry."
+  description = "Optional principal ID granted AcrPush on this registry."
   type        = string
+  default     = null
+  nullable    = true
 }

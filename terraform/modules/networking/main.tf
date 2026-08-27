@@ -207,7 +207,7 @@ resource "azurerm_subnet" "pe" {
   virtual_network_name = azurerm_virtual_network.main.name
   address_prefixes     = [var.pe_subnet_cidr]
 
-  private_endpoint_network_policies_enabled = false
+  private_endpoint_network_policies = "Disabled"
 }
 
 resource "azurerm_subnet_network_security_group_association" "pe" {
@@ -233,7 +233,6 @@ resource "azurerm_public_ip" "nat" {
   resource_group_name = azurerm_resource_group.main.name
   allocation_method   = "Static"
   sku                 = "Standard"
-  zones               = ["1", "2", "3"]
   tags                = local.common_tags
 }
 
@@ -243,7 +242,6 @@ resource "azurerm_nat_gateway" "main" {
   resource_group_name     = azurerm_resource_group.main.name
   sku_name                = "Standard"
   idle_timeout_in_minutes = 10
-  zones                   = ["1"]
   tags                    = local.common_tags
 }
 

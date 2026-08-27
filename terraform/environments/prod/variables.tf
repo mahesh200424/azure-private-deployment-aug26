@@ -31,7 +31,7 @@ variable "aks_node_count" {
 variable "aks_vm_size" {
   description = "VM SKU for AKS node pools."
   type        = string
-  default     = "Standard_D4ds_v5"
+  default     = "Standard_D4s_v7"
 }
 
 variable "acr_name" {
@@ -91,4 +91,10 @@ variable "agent_vm_size" {
   description = "Temporary private Azure DevOps agent VM size."
   type        = string
   default     = "Standard_B2s"
+}
+
+variable "deploy_azure_devops_agent" {
+  description = "Whether to deploy the private Azure DevOps agent VM. Disable when regional vCPU quota is reserved for AKS."
+  type        = bool
+  default     = true
 }

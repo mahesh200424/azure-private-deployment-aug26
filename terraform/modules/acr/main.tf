@@ -16,14 +16,10 @@ resource "azurerm_container_registry" "main" {
   admin_enabled                 = false
   public_network_access_enabled = false
 
-  zone_redundancy_enabled = true
+  zone_redundancy_enabled = false
 
   identity {
     type = "SystemAssigned"
-  }
-
-  trust_policy {
-    enabled = true
   }
 
   retention_policy {
@@ -39,6 +35,7 @@ resource "azurerm_container_registry" "main" {
 }
 
 resource "azurerm_role_assignment" "agent_acr_push" {
+  count                = var.push_principal_id == null ? 0 : 1
   scope                = azurerm_container_registry.main.id
   role_definition_name = "AcrPush"
   principal_id         = var.push_principal_id

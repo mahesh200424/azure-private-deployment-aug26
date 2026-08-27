@@ -2,7 +2,7 @@
 #   ACR_NAME           Terraform output module.acr.acr_name
 #   ACR_LOGIN_SERVER   Terraform output acr_login_server
 #   APP_NAME           myapp
-# The agent VM's system-assigned identity receives AcrPush from Terraform — no Docker credentials needed.
+# The AKS agent pod uses a federated workload identity with AcrPush.
 
 trigger:
   branches:
@@ -98,12 +98,20 @@ stages:
           - script: |
               set -euo pipefail
               gunzip -c "$(Pipeline.Workspace)/docker-image/image.tar.gz" | docker load
-              az login --identity
+              federated_token=""
+              while IFS= read -r line || [[ -n "$line" ]]; do
+                federated_token+="$line"
+              done < "$AZURE_FEDERATED_TOKEN_FILE"
+              az login --service-principal \
+                --username "$AZURE_CLIENT_ID" \
+                --tenant "$AZURE_TENANT_ID" \
+                --federated-token "$federated_token" \
+                --output none
               az acr login --name "$(ACR_NAME)"
               docker push "$(IMAGE_REPOSITORY):$(BUILD_TAG)"
               docker push "$(IMAGE_REPOSITORY):latest"
               docker logout "$(ACR_LOGIN_SERVER)"
-            displayName: Push with the agent managed identity
+            displayName: Push with the agent workload identity
 
   - stage: Deploy
     displayName: GitOps deployment

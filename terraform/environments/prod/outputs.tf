@@ -25,5 +25,10 @@ output "workload_identity_client_id" {
 
 output "agent_vm_name" {
   description = "Private VM that must be registered in Azure DevOps private-vnet-pool."
-  value       = module.azure_devops_agent.vm_name
+  value       = try(module.azure_devops_agent[0].vm_name, null)
+}
+
+output "azdo_agent_workload_identity_client_id" {
+  description = "Client ID annotated on the Azure DevOps agent Kubernetes ServiceAccount."
+  value       = azurerm_user_assigned_identity.azdo_agent.client_id
 }

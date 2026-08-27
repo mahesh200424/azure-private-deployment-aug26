@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: azdo-agent
+  namespace: azdo-agents
+  annotations:
+    azure.workload.identity/client-id: 5ab19c67-cae3-4e69-95c2-3248b6af6fd8
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: azdo-agent
+  namespace: azdo-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: azdo-agent
+  template:
+    metadata:
+      labels:
+        app: azdo-agent
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: azdo-agent
+      nodeSelector:
+        nodepool-type: user
+      containers:
+        - name: agent
+          image: ubuntu:24.04
+          env:
+            - name: AZP_URL
+              value: https://dev.azure.com/maheshkumargud
+            - name: AZP_POOL
+              value: private-vnet-pool
+            - name: AZP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: azdo-agent-pat
+                  key: AZP_TOKEN
+            - name: DOCKER_HOST
+              value: tcp://localhost:2375
+            - name: AGENT_ALLOW_RUNASROOT
+              value: "1"
+            - name: VSO_AGENT_IGNORE
+              value: AZP_TOKEN
+          command: [/bin/bash, -c]
+          volumeMounts:
+            - name: agent-work
+              mountPath: /azp/_work
+          args:
+            - |
+              set -euo pipefail
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates curl git jq docker.io
+              curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              rm -rf /var/lib/apt/lists/*
+              mkdir -p /azp && cd /azp
+              version="$(curl -fsSL https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest | jq -r '.tag_name | sub("^v"; "")')"
+              curl -fsSL "https://download.agent.dev.azure.com/agent/${version}/vsts-agent-linux-x64-${version}.tar.gz" | tar -xz
+              ./bin/installdependencies.sh
+              cleanup() { ./config.sh remove --unattended --auth pat --token "$AZP_TOKEN" || true; }
+              trap cleanup EXIT TERM INT
+              ./config.sh --unattended --acceptTeeEula --url "$AZP_URL" --auth pat --token "$AZP_TOKEN" --pool "$AZP_POOL" --agent "aks-${HOSTNAME}" --replace --work _work
+              ./run.sh
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+        - name: docker
+          image: docker:27-dind
+          env:
+            - name: DOCKER_TLS_CERTDIR
+              value: ""
+          args: [--host=tcp://0.0.0.0:2375, --tls=false]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: agent-work
+              mountPath: /azp/_work
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+      volumes:
+        - name: agent-work
+          emptyDir: {}

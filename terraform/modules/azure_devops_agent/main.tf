@@ -22,6 +22,7 @@ resource "azurerm_linux_virtual_machine" "agent" {
     azurerm_network_interface.agent.id,
   ]
 
+  zone                            = "1"
   disable_password_authentication = true
   encryption_at_host_enabled      = true
 

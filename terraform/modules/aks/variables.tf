@@ -13,6 +13,11 @@ variable "environment" {
   type        = string
 }
 
+variable "vnet_id" {
+  description = "Resource ID of the VNet. Required for the control plane to link the private DNS zone."
+  type        = string
+}
+
 variable "aks_subnet_id" {
   description = "Resource ID of the subnet for AKS nodes (Azure CNI)."
   type        = string

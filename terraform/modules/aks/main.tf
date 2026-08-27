@@ -47,6 +47,20 @@ resource "azurerm_role_assignment" "aks_network_contributor" {
   principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
 }
 
+# Required for the control plane to link the private DNS zone to the VNet.
+resource "azurerm_role_assignment" "aks_vnet_network_contributor" {
+  scope                = var.vnet_id
+  role_definition_name = "Network Contributor"
+  principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
+}
+
+# Required for the control plane to assign the kubelet identity to node pool VMs.
+resource "azurerm_role_assignment" "aks_kubelet_mi_operator" {
+  scope                = azurerm_user_assigned_identity.aks_kubelet.id
+  role_definition_name = "Managed Identity Operator"
+  principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
+}
+
 resource "azurerm_role_assignment" "kubelet_acrpull" {
   scope                            = var.acr_id
   role_definition_name             = "AcrPull"
@@ -86,9 +100,8 @@ resource "azurerm_kubernetes_cluster" "main" {
     vm_size                      = var.vm_size
     vnet_subnet_id               = var.aks_subnet_id
     os_disk_size_gb              = 128
-    os_disk_type                 = "Ephemeral"
+    os_disk_type                 = "Managed"
     type                         = "VirtualMachineScaleSets"
-    zones                        = ["1", "2", "3"]
     only_critical_addons_enabled = true
     enable_auto_scaling          = true
     min_count                    = var.node_count
@@ -142,6 +155,8 @@ resource "azurerm_kubernetes_cluster" "main" {
   depends_on = [
     azurerm_role_assignment.aks_dns_contributor,
     azurerm_role_assignment.aks_network_contributor,
+    azurerm_role_assignment.aks_vnet_network_contributor,
+    azurerm_role_assignment.aks_kubelet_mi_operator,
     azurerm_role_assignment.kubelet_acrpull,
   ]
 }
@@ -153,8 +168,7 @@ resource "azurerm_kubernetes_cluster_node_pool" "user" {
   node_count            = var.node_count
   vnet_subnet_id        = var.aks_subnet_id
   os_disk_size_gb       = 128
-  os_disk_type          = "Ephemeral"
-  zones                 = ["1", "2", "3"]
+  os_disk_type          = "Managed"
   enable_auto_scaling   = true
   min_count             = var.node_count
   max_count             = var.node_count * 5
@@ -165,8 +179,6 @@ resource "azurerm_kubernetes_cluster_node_pool" "user" {
     "nodepool-type" = "user"
     "environment"   = var.environment
   }
-
-  node_taints = ["workload=user:NoSchedule"]
 
   upgrade_settings {
     max_surge = "33%"
