@@ -50,8 +50,9 @@ stages:
 
           - script: |
               set -euo pipefail
+              build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
               docker build \
-                --build-arg BUILD_DATE="$(Build.QueuedTime)" \
+                --build-arg BUILD_DATE="$build_date" \
                 --build-arg VCS_REF="$(Build.SourceVersion)" \
                 --build-arg VERSION="$(BUILD_TAG)" \
                 -t "$(IMAGE_REPOSITORY):$(BUILD_TAG)" \

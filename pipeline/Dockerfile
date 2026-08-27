@@ -2,7 +2,7 @@ ARG BUILD_DATE="unknown"
 ARG VCS_REF="unknown"
 ARG VERSION="unknown"
 
-FROM --platform=$BUILDPLATFORM maven:3.9-eclipse-temurin-17 AS builder
+FROM maven:3.9-eclipse-temurin-17 AS builder
 
 WORKDIR /build
 
