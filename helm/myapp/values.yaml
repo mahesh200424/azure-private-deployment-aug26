@@ -2,14 +2,12 @@
 # This is a YAML-formatted file.
 
 replicaCount: 2
-
 image:
   # Set this to the Terraform output `acr_login_server` + `/myapp` before bootstrap.
   repository: ""
   # The pipeline always replaces this with an immutable Azure DevOps build number.
-  tag: ""
+  tag: "17"
   pullPolicy: IfNotPresent
-
 # Blue-Green deployment configuration
 blueGreen:
   enabled: true
@@ -17,22 +15,18 @@ blueGreen:
   # Keep this false in production: promotion is an explicit, auditable action.
   autoPromotionEnabled: false
   scaleDownDelaySeconds: 30
-
 serviceAccount:
   create: true
   name: ""
   annotations:
-    azure.workload.identity/client-id: ""  # Set to your Azure Managed Identity client ID
-
+    azure.workload.identity/client-id: "" # Set to your Azure Managed Identity client ID
 # Pod-level annotations injected into both blue and green deployments
 podAnnotations:
   azure.workload.identity/use: "true"
-
 service:
   type: ClusterIP
   port: 80
   targetPort: 8080
-
 ingress:
   enabled: false
   className: "nginx"
@@ -43,7 +37,6 @@ ingress:
   tls:
     enabled: false
     secretName: myapp-tls
-
 resources:
   requests:
     cpu: 100m
@@ -51,14 +44,12 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
-
 autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
-
 # Azure Key Vault integration via Secrets Store CSI Driver
 keyVault:
   # Set from Terraform/Azure before ArgoCD applies this chart.
@@ -71,7 +62,6 @@ keyVault:
     - secretName: api-key
       objectName: api-key
       objectType: secret
-
 # Kubernetes NetworkPolicy supplements Azure private endpoints.  The private
 # endpoint CIDR must be the PE subnet CIDR used by Terraform, not a public IP.
 networkPolicy:
@@ -82,7 +72,6 @@ networkPolicy:
     k8s-app: kube-dns
   keyVaultPrivateEndpointCidrs:
     - "10.2.0.0/24"
-
 livenessProbe:
   enabled: true
   httpGet:
@@ -93,7 +82,6 @@ livenessProbe:
   timeoutSeconds: 5
   failureThreshold: 3
   successThreshold: 1
-
 readinessProbe:
   enabled: true
   httpGet:
@@ -104,21 +92,17 @@ readinessProbe:
   timeoutSeconds: 3
   failureThreshold: 3
   successThreshold: 1
-
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
   # maxUnavailable: 1  # use either minAvailable or maxUnavailable, not both
-
 nodeSelector:
   nodepool-type: user
-
 tolerations:
   - key: workload
     operator: Equal
     value: user
     effect: NoSchedule
-
 affinity:
   podAntiAffinity:
     preferredDuringSchedulingIgnoredDuringExecution:
