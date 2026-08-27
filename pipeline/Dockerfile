@@ -30,9 +30,8 @@ LABEL org.opencontainers.image.title="springboot-app" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.source="https://dev.azure.com/org/project/_git/springboot-app" \
-      org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.vendor="Your Organisation"
+      org.opencontainers.image.source="https://github.com/mahesh200424/azure-private-deployment-aug26" \
+      org.opencontainers.image.licenses="MIT"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \

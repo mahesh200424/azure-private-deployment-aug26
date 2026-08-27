@@ -3,8 +3,7 @@
 
 replicaCount: 2
 image:
-  # Set this to the Terraform output `acr_login_server` + `/myapp` before bootstrap.
-  repository: ""
+  repository: acrprivaksprod001.azurecr.io/myapp
   # The pipeline always replaces this with an immutable Azure DevOps build number.
   tag: "17"
   pullPolicy: IfNotPresent
@@ -19,7 +18,7 @@ serviceAccount:
   create: true
   name: ""
   annotations:
-    azure.workload.identity/client-id: "" # Set to your Azure Managed Identity client ID
+    azure.workload.identity/client-id: 117180cb-1ddf-4cd7-9761-5e2183b258d6
 # Pod-level annotations injected into both blue and green deployments
 podAnnotations:
   azure.workload.identity/use: "true"
@@ -52,9 +51,8 @@ autoscaling:
   targetMemoryUtilizationPercentage: 80
 # Azure Key Vault integration via Secrets Store CSI Driver
 keyVault:
-  # Set from Terraform/Azure before ArgoCD applies this chart.
-  vaultName: ""
-  tenantId: ""
+  vaultName: kv-priv-aks-prod-001
+  tenantId: 2c066363-a076-4bdb-8ee5-0996a73d1f86
   secrets:
     - secretName: db-password
       objectName: db-password

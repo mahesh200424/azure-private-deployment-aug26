@@ -1,6 +1,6 @@
 apiVersion: v2
 name: myapp
-description: A production-ready Helm chart for blue-green deployment on Azure Kubernetes Service with Key Vault integration and Workload Identity support.
+description: Helm chart for a Spring Boot service on AKS using Argo Rollouts and Azure Workload Identity.
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
