@@ -1,8 +1,3 @@
-# ─────────────────────────────────────────────────────────────
-# Module: networking
-# Creates: Resource Group, VNet, subnets, NSGs, NAT Gateway
-# ─────────────────────────────────────────────────────────────
-
 locals {
   name_prefix = "${var.environment}-private"
 
@@ -13,18 +8,12 @@ locals {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# Resource Group
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_resource_group" "main" {
   name     = var.resource_group_name
   location = var.location
   tags     = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Virtual Network
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_virtual_network" "main" {
   name                = "vnet-${local.name_prefix}"
   location            = azurerm_resource_group.main.location
@@ -33,16 +22,12 @@ resource "azurerm_virtual_network" "main" {
   tags                = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# NSG — AKS subnet
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_network_security_group" "aks" {
   name                = "nsg-aks-${local.name_prefix}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   tags                = local.common_tags
 
-  # Allow intra-cluster communication
   security_rule {
     name                       = "AllowVnetInBound"
     priority                   = 100
@@ -55,7 +40,6 @@ resource "azurerm_network_security_group" "aks" {
     destination_address_prefix = "VirtualNetwork"
   }
 
-  # Allow Azure Load Balancer probes
   security_rule {
     name                       = "AllowAzureLoadBalancerInBound"
     priority                   = 110
@@ -68,7 +52,6 @@ resource "azurerm_network_security_group" "aks" {
     destination_address_prefix = "*"
   }
 
-  # Deny all other inbound traffic
   security_rule {
     name                       = "DenyAllInBound"
     priority                   = 4096
@@ -81,7 +64,6 @@ resource "azurerm_network_security_group" "aks" {
     destination_address_prefix = "*"
   }
 
-  # Allow outbound to VNet (DNS, API server, private endpoints)
   security_rule {
     name                       = "AllowVnetOutBound"
     priority                   = 100
@@ -94,7 +76,6 @@ resource "azurerm_network_security_group" "aks" {
     destination_address_prefix = "VirtualNetwork"
   }
 
-  # Allow outbound to Azure (ARM, monitoring, etc.)
   security_rule {
     name                       = "AllowAzureCloudOutBound"
     priority                   = 110
@@ -107,7 +88,6 @@ resource "azurerm_network_security_group" "aks" {
     destination_address_prefix = "AzureCloud"
   }
 
-  # Allow Internet egress via NAT Gateway (Microsoft package repos, etc.)
   security_rule {
     name                       = "AllowInternetOutBound"
     priority                   = 120
@@ -121,16 +101,12 @@ resource "azurerm_network_security_group" "aks" {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# NSG — Private Endpoints subnet
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_network_security_group" "pe" {
   name                = "nsg-pe-${local.name_prefix}"
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
   tags                = local.common_tags
 
-  # Allow inbound from AKS subnet to private endpoints
   security_rule {
     name                       = "AllowAksToPrivateEndpoints"
     priority                   = 100
@@ -155,7 +131,6 @@ resource "azurerm_network_security_group" "pe" {
     destination_address_prefix = var.pe_subnet_cidr
   }
 
-  # Deny all other inbound
   security_rule {
     name                       = "DenyAllInBound"
     priority                   = 4096
@@ -212,9 +187,6 @@ resource "azurerm_network_security_group" "agent" {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# AKS Subnet
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_subnet" "aks" {
   name                 = "snet-aks-${local.name_prefix}"
   resource_group_name  = azurerm_resource_group.main.name
@@ -227,11 +199,8 @@ resource "azurerm_subnet_network_security_group_association" "aks" {
   network_security_group_id = azurerm_network_security_group.aks.id
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private Endpoints Subnet
-# Private endpoint network policies must be disabled to allow
-# private endpoints to be placed in this subnet.
-# ─────────────────────────────────────────────────────────────
+# private_endpoint_network_policies_enabled must be false — Azure requires this
+# on any subnet hosting private endpoints.
 resource "azurerm_subnet" "pe" {
   name                 = "snet-pe-${local.name_prefix}"
   resource_group_name  = azurerm_resource_group.main.name
@@ -258,9 +227,6 @@ resource "azurerm_subnet_network_security_group_association" "agent" {
   network_security_group_id = azurerm_network_security_group.agent.id
 }
 
-# ─────────────────────────────────────────────────────────────
-# NAT Gateway — deterministic egress for AKS nodes
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_public_ip" "nat" {
   name                = "pip-nat-${local.name_prefix}"
   location            = azurerm_resource_group.main.location

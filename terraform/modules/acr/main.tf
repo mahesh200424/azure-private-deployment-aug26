@@ -1,9 +1,3 @@
-# ─────────────────────────────────────────────────────────────
-# Module: acr
-# Creates: Premium ACR (fully private), Private Endpoint,
-#          Private DNS Zone, VNet link
-# ─────────────────────────────────────────────────────────────
-
 locals {
   name_prefix = "${var.environment}-private"
 
@@ -14,9 +8,6 @@ locals {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# Azure Container Registry
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_container_registry" "main" {
   name                          = var.acr_name
   resource_group_name           = var.resource_group_name
@@ -25,20 +16,16 @@ resource "azurerm_container_registry" "main" {
   admin_enabled                 = false
   public_network_access_enabled = false
 
-  # Zone redundancy requires Premium SKU
   zone_redundancy_enabled = true
 
-  # System-assigned managed identity for ACR tasks / geo-replication
   identity {
     type = "SystemAssigned"
   }
 
-  # Enforce content trust for image signing
   trust_policy {
     enabled = true
   }
 
-  # Retain untagged manifests for 7 days before quarantine
   retention_policy {
     days    = 7
     enabled = true
@@ -57,9 +44,6 @@ resource "azurerm_role_assignment" "agent_acr_push" {
   principal_id         = var.push_principal_id
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private DNS Zone — privatelink.azurecr.io
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_private_dns_zone" "acr" {
   name                = "privatelink.azurecr.io"
   resource_group_name = var.resource_group_name
@@ -75,9 +59,6 @@ resource "azurerm_private_dns_zone_virtual_network_link" "acr" {
   tags                  = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private Endpoint for ACR
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_private_endpoint" "acr" {
   name                = "pe-acr-${local.name_prefix}"
   location            = var.location

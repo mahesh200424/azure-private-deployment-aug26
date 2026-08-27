@@ -1,9 +1,8 @@
-# Build, publish, and GitOps-deploy from a private Azure DevOps agent.
 # Required variable group `platform-config`:
 #   ACR_NAME           Terraform output module.acr.acr_name
 #   ACR_LOGIN_SERVER   Terraform output acr_login_server
 #   APP_NAME           myapp
-# The agent VM's system-assigned identity receives AcrPush from Terraform.
+# The agent VM's system-assigned identity receives AcrPush from Terraform — no Docker credentials needed.
 
 trigger:
   branches:
@@ -32,7 +31,6 @@ stages:
           - checkout: self
             fetchDepth: 1
 
-          # Test reports are written to the workspace and can be published.
           - script: |
               set -euo pipefail
               docker run --rm \
@@ -118,8 +116,8 @@ stages:
           runOnce:
             deploy:
               steps:
-                # Enable "Allow scripts to access the OAuth token" and grant
-                # the build service identity Contribute permission to this repo.
+                # Requires "Allow scripts to access the OAuth token" and Contribute
+                # permission on the repo for the build service identity.
                 - checkout: self
                   persistCredentials: true
                   fetchDepth: 1

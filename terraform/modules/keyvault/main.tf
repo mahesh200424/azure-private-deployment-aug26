@@ -1,10 +1,3 @@
-# ─────────────────────────────────────────────────────────────
-# Module: keyvault
-# Creates: Key Vault (fully private, RBAC), Private Endpoint,
-#          Private DNS Zone, VNet link,
-#          Role Assignment for AKS kubelet identity
-# ─────────────────────────────────────────────────────────────
-
 data "azurerm_client_config" "current" {}
 
 locals {
@@ -17,9 +10,6 @@ locals {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# Key Vault
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_key_vault" "main" {
   name                          = var.keyvault_name
   location                      = var.location
@@ -30,7 +20,6 @@ resource "azurerm_key_vault" "main" {
   purge_protection_enabled      = true
   public_network_access_enabled = false
 
-  # Use Azure RBAC for access control (no legacy access policies)
   enable_rbac_authorization = true
 
   network_acls {
@@ -43,9 +32,6 @@ resource "azurerm_key_vault" "main" {
   tags = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private DNS Zone — privatelink.vaultcore.azure.net
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_private_dns_zone" "keyvault" {
   name                = "privatelink.vaultcore.azure.net"
   resource_group_name = var.resource_group_name
@@ -61,9 +47,6 @@ resource "azurerm_private_dns_zone_virtual_network_link" "keyvault" {
   tags                  = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private Endpoint for Key Vault
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_private_endpoint" "keyvault" {
   name                = "pe-kv-${local.name_prefix}"
   location            = var.location
@@ -84,15 +67,12 @@ resource "azurerm_private_endpoint" "keyvault" {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# RBAC — grant only the dedicated workload identity 'Key Vault Secrets User'.
-# The federated credential is bound to system:serviceaccount:myapp:myapp.
-# ─────────────────────────────────────────────────────────────
+# Scoped to the dedicated workload identity only.
+# The federated credential binds this to system:serviceaccount:myapp:myapp.
 resource "azurerm_role_assignment" "myapp_kv_secrets_user" {
   scope                = azurerm_key_vault.main.id
   role_definition_name = "Key Vault Secrets User"
   principal_id         = var.workload_identity_principal_id
 
-  # Avoid duplicate role assignment errors on re-apply
   skip_service_principal_aad_check = true
 }

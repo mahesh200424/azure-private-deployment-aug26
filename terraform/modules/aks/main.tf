@@ -1,11 +1,3 @@
-# ─────────────────────────────────────────────────────────────
-# Module: aks
-# Creates: Private AKS cluster, system + user node pools,
-#          kubelet managed identity, AcrPull role assignment,
-#          Private DNS Zone, workload identity / OIDC issuer,
-#          Azure CNI networking, Key Vault CSI driver addon
-# ─────────────────────────────────────────────────────────────
-
 data "azurerm_resource_group" "main" {
   name = var.resource_group_name
 }
@@ -21,9 +13,6 @@ locals {
   }
 }
 
-# ─────────────────────────────────────────────────────────────
-# User-assigned managed identity for the AKS control plane
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_user_assigned_identity" "aks_control_plane" {
   name                = "mi-aks-cp-${local.name_prefix}"
   resource_group_name = var.resource_group_name
@@ -31,10 +20,6 @@ resource "azurerm_user_assigned_identity" "aks_control_plane" {
   tags                = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# User-assigned managed identity for AKS kubelet
-# (used to pull images from ACR and read Key Vault secrets)
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_user_assigned_identity" "aks_kubelet" {
   name                = "mi-aks-kubelet-${local.name_prefix}"
   resource_group_name = var.resource_group_name
@@ -42,34 +27,26 @@ resource "azurerm_user_assigned_identity" "aks_kubelet" {
   tags                = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Private DNS Zone for AKS API server
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_private_dns_zone" "aks" {
   name                = "privatelink.${var.location}.azmk8s.io"
   resource_group_name = var.resource_group_name
   tags                = local.common_tags
 }
 
-# Grant AKS control-plane identity contributor on the private DNS zone
-# so it can manage A records for the API server endpoint.
+# Required for the control plane to manage A records for the private API server endpoint.
 resource "azurerm_role_assignment" "aks_dns_contributor" {
   scope                = azurerm_private_dns_zone.aks.id
   role_definition_name = "Private DNS Zone Contributor"
   principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
 }
 
-# Grant AKS control-plane identity network contributor on the VNet
-# (required for Azure CNI to allocate IPs from the subnet).
+# Required for Azure CNI to allocate pod IPs directly from the subnet.
 resource "azurerm_role_assignment" "aks_network_contributor" {
   scope                = var.aks_subnet_id
   role_definition_name = "Network Contributor"
   principal_id         = azurerm_user_assigned_identity.aks_control_plane.principal_id
 }
 
-# ─────────────────────────────────────────────────────────────
-# AcrPull role assignment for kubelet identity
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_role_assignment" "kubelet_acrpull" {
   scope                            = var.acr_id
   role_definition_name             = "AcrPull"
@@ -77,9 +54,6 @@ resource "azurerm_role_assignment" "kubelet_acrpull" {
   skip_service_principal_aad_check = true
 }
 
-# ─────────────────────────────────────────────────────────────
-# AKS Cluster
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_kubernetes_cluster" "main" {
   name                       = local.cluster_name
   location                   = var.location
@@ -88,12 +62,10 @@ resource "azurerm_kubernetes_cluster" "main" {
   kubernetes_version         = var.kubernetes_version
   node_resource_group        = "rg-${local.cluster_name}-nodes"
 
-  # ── Private cluster ──────────────────────────────────────
   private_cluster_enabled             = true
   private_dns_zone_id                 = azurerm_private_dns_zone.aks.id
   private_cluster_public_fqdn_enabled = false
 
-  # ── Identity ─────────────────────────────────────────────
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.aks_control_plane.id]
@@ -105,11 +77,9 @@ resource "azurerm_kubernetes_cluster" "main" {
     user_assigned_identity_id = azurerm_user_assigned_identity.aks_kubelet.id
   }
 
-  # ── Workload Identity & OIDC ─────────────────────────────
   workload_identity_enabled = true
   oidc_issuer_enabled       = true
 
-  # ── System node pool ─────────────────────────────────────
   default_node_pool {
     name                         = "system"
     node_count                   = var.node_count
@@ -135,7 +105,6 @@ resource "azurerm_kubernetes_cluster" "main" {
     }
   }
 
-  # ── Azure CNI networking ─────────────────────────────────
   network_profile {
     network_plugin    = "azure"
     network_policy    = "calico"
@@ -145,24 +114,20 @@ resource "azurerm_kubernetes_cluster" "main" {
     dns_service_ip    = "172.16.0.10"
   }
 
-  # ── Azure Monitor / Insights ─────────────────────────────
   oms_agent {
     log_analytics_workspace_id = azurerm_log_analytics_workspace.aks.id
   }
 
-  # ── Key Vault Secrets Store CSI driver ───────────────────
   key_vault_secrets_provider {
     secret_rotation_enabled  = true
     secret_rotation_interval = "2m"
   }
 
-  # ── Azure AD / RBAC ──────────────────────────────────────
   azure_active_directory_role_based_access_control {
     managed            = true
     azure_rbac_enabled = true
   }
 
-  # ── Auto-upgrade ─────────────────────────────────────────
   automatic_channel_upgrade = "patch"
 
   maintenance_window {
@@ -181,9 +146,6 @@ resource "azurerm_kubernetes_cluster" "main" {
   ]
 }
 
-# ─────────────────────────────────────────────────────────────
-# User node pool — for application workloads
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_kubernetes_cluster_node_pool" "user" {
   name                  = "user"
   kubernetes_cluster_id = azurerm_kubernetes_cluster.main.id
@@ -213,9 +175,6 @@ resource "azurerm_kubernetes_cluster_node_pool" "user" {
   tags = local.common_tags
 }
 
-# ─────────────────────────────────────────────────────────────
-# Log Analytics Workspace for AKS monitoring
-# ─────────────────────────────────────────────────────────────
 resource "azurerm_log_analytics_workspace" "aks" {
   name                = "law-aks-${local.name_prefix}"
   location            = var.location

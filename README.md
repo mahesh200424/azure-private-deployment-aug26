@@ -7,29 +7,31 @@ A fully private and secure application deployment environment on Azure using AKS
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Azure VNet                               │
-│                                                                 │
-│  ┌──────────────────┐      ┌──────────────────────────────┐    │
-│  │   AKS Subnet     │      │   Private Endpoints Subnet   │    │
-│  │                  │      │                              │    │
-│  │  ┌────────────┐  │      │  ┌────────┐  ┌───────────┐  │    │
-│  │  │ System Pool│  │◄────►│  │  ACR   │  │ Key Vault │  │    │
-│  │  ├────────────┤  │      │  │  PE    │  │    PE     │  │    │
-│  │  │  App Pool  │  │      │  └────────┘  └───────────┘  │    │
-│  │  └────────────┘  │      └──────────────────────────────┘    │
-│  └──────────────────┘                                           │
-│           │                                                     │
-│    NAT Gateway (egress only)                                    │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│                            Azure VNet (10.0.0.0/8)                   │
+│                                                                      │
+│  ┌─────────────────┐   ┌──────────────────────────┐   ┌──────────┐  │
+│  │  AKS Subnet     │   │  Private Endpoints Subnet │   │  Agent   │  │
+│  │  10.1.0.0/16    │   │  10.2.0.0/24              │   │  Subnet  │  │
+│  │                 │   │                           │   │10.3.0.0/ │  │
+│  │ ┌─────────────┐ │   │  ┌────────┐  ┌─────────┐ │   │   24     │  │
+│  │ │ System Pool │ │◄──►│  │  ACR   │  │Key Vault│ │   │ ┌──────┐ │  │
+│  │ ├─────────────┤ │   │  │  PE    │  │   PE    │ │   │ │ ADO  │ │  │
+│  │ │  User Pool  │ │   │  └────────┘  └─────────┘ │   │ │Agent │ │  │
+│  │ └─────────────┘ │   └──────────────────────────┘   │ └──────┘ │  │
+│  └─────────────────┘                                   └──────────┘  │
+│           │                                                          │
+│    NAT Gateway (egress only)                                         │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 **Security posture:**
-- AKS cluster is fully private (no public API server)
+- AKS cluster is fully private (no public API server endpoint)
 - ACR has public network access disabled, accessed via Private Endpoint
 - Key Vault has public network access disabled, accessed via Private Endpoint
 - Workload Identity (OIDC) used — no credentials stored in pods
-- All secrets injected via CSI Secret Store Driver (never in env vars)
+- All secrets injected via CSI Secret Store Driver, mounted as files at `/mnt/secrets/`
+- Azure DevOps agent runs inside the VNet (agent subnet) — provisioned by Terraform
 
 ---
 
@@ -40,37 +42,38 @@ azure-private-deployment/
 ├── terraform/
 │   ├── environments/
 │   │   └── prod/
-│   │       ├── main.tf          # Root module, calls all sub-modules
-│   │       ├── variables.tf
-│   │       ├── outputs.tf
-│   │       ├── terraform.tfvars
-│   │       └── backend.tf       # Remote state (Azure Storage)
+│   │       ├── main.tf          # Root module — wires all sub-modules together
+│   │       ├── variables.tf     # Input variables with validation rules
+│   │       ├── outputs.tf       # Outputs needed for Step 5 (GitOps values)
+│   │       ├── terraform.tfvars # Sample values — replace before applying
+│   │       └── backend.tf       # Remote state (Azure Blob, AAD auth, no SAS keys)
 │   └── modules/
-│       ├── networking/          # VNet, subnets, NSG, NAT gateway
-│       ├── acr/                 # ACR + private endpoint + DNS
-│       ├── keyvault/            # Key Vault + private endpoint + RBAC
-│       └── aks/                 # Private AKS + workload identity + CSI
+│       ├── networking/          # VNet, subnets (AKS/PE/agent), NSG, NAT gateway
+│       ├── acr/                 # ACR Premium + private endpoint + DNS zone
+│       ├── keyvault/            # Key Vault + private endpoint + RBAC assignments
+│       ├── aks/                 # Private AKS, system+user pools, workload identity, CSI, Log Analytics
+│       ├── workload_identity/   # Dedicated MI + federated OIDC credential for app pods
+│       └── azure_devops_agent/  # Self-hosted agent VM (Ubuntu 22.04, system MI, cloud-init)
 ├── pipeline/
-│   ├── azure-pipelines.yml      # CI/CD pipeline (Build → Push → Deploy)
-│   └── Dockerfile               # Multi-stage Spring Boot image
+│   ├── azure-pipelines.yml      # CI/CD: Build → Test → Push → GitOps commit
+│   └── Dockerfile               # Multi-stage Spring Boot image (Maven builder + JRE runtime)
 ├── helm/
 │   └── myapp/
 │       ├── Chart.yaml
 │       ├── values.yaml
 │       └── templates/
 │           ├── _helpers.tpl
-│           ├── deployment-blue.yaml
-│           ├── deployment-green.yaml
-│           ├── service.yaml         # blue, green, active services
-│           ├── serviceaccount.yaml  # Workload Identity SA
-│           ├── secretproviderclass.yaml
-│           └── hpa.yaml
+│           ├── rollout.yaml             # Argo Rollouts blue/green Rollout resource
+│           ├── service.yaml             # Active + preview Services (controller-owned)
+│           ├── serviceaccount.yaml      # Workload Identity SA
+│           ├── secretproviderclass.yaml # CSI SecretProviderClass → Key Vault
+│           └── networkpolicy.yaml
 ├── argocd/
-│   ├── install-argocd.sh        # Bootstrap script
-│   ├── project.yaml             # ArgoCD AppProject
-│   ├── application.yaml         # ArgoCD Application
-│   ├── blue-green-rollout.yaml  # Legacy example; not applied by bootstrap
-│   └── analysis-template.yaml   # Legacy example; not applied by bootstrap
+│   ├── install-argocd.sh        # Bootstrap script (idempotent, supports --dry-run)
+│   ├── project.yaml             # AppProject with RBAC roles and sync windows
+│   └── application.yaml         # ArgoCD Application (automated sync, self-heal)
+├── src/                         # Spring Boot application source
+├── pom.xml
 └── README.md
 ```
 
@@ -80,72 +83,103 @@ azure-private-deployment/
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| Terraform | >= 1.5 | Infrastructure provisioning |
+| Terraform | >= 1.3 | Infrastructure provisioning (actual `required_version` in main.tf) |
 | Azure CLI | >= 2.50 | Authentication and cluster access |
 | kubectl | >= 1.27 | Kubernetes management |
 | Helm | >= 3.12 | Chart deployment |
 | ArgoCD CLI | >= 2.8 | GitOps management |
+| jq | any | Used by `install-argocd.sh` pre-flight check |
+
+> **Note:** The Terraform lock file pins `azurerm ~> 3.117` and `azuread ~> 2.53`. Run `terraform init` to restore the exact provider versions.
 
 ---
 
 ## Step 1 — Bootstrap Terraform Remote State
 
-Before running Terraform, create the remote state storage manually (this is a one-time step):
+Create the remote state storage once before running `terraform init`. The backend is configured to use AAD auth (`use_azuread_auth = true`) — no SAS keys or storage account keys are needed.
 
 ```bash
-# Set variables
-RG="rg-terraform-state"
-SA="satfstate$(openssl rand -hex 4)"
+RG="rg-tfstate"
+SA="stprivtfstateprod"   # must be globally unique
 CONTAINER="tfstate"
-LOCATION="eastus"
+LOCATION="eastus2"       # match var.location in terraform.tfvars
 
-# Create resource group
 az group create --name $RG --location $LOCATION
 
-# Create storage account
 az storage account create \
   --name $SA \
   --resource-group $RG \
   --location $LOCATION \
   --sku Standard_LRS \
-  --allow-blob-public-access false \
-  --min-tls-version TLS1_2
+  --kind StorageV2 \
+  --min-tls-version TLS1_2 \
+  --allow-blob-public-access false
 
-# Create container
 az storage container create \
   --name $CONTAINER \
-  --account-name $SA
+  --account-name $SA \
+  --auth-mode login
 
-# Enable versioning (protects state history)
+# Protect state history
 az storage account blob-service-properties update \
   --account-name $SA \
   --resource-group $RG \
   --enable-versioning true
 
-echo "Storage account: $SA"
-echo "Update backend.tf with: storage_account_name = \"$SA\""
+# Grant yourself Storage Blob Data Contributor so AAD auth works
+az role assignment create \
+  --role "Storage Blob Data Contributor" \
+  --assignee $(az ad signed-in-user show --query id -o tsv) \
+  --scope $(az storage account show -n $SA -g $RG --query id -o tsv)
 ```
 
-Update `terraform/environments/prod/backend.tf` with the storage account name.
+Then initialise with backend config flags (values are intentionally not committed to `backend.tf`):
+
+```bash
+cd terraform/environments/prod
+
+terraform init \
+  -backend-config="resource_group_name=$RG" \
+  -backend-config="storage_account_name=$SA" \
+  -backend-config="container_name=$CONTAINER" \
+  -backend-config="key=prod/azure-private-deployment.tfstate" \
+  -backend-config="use_azuread_auth=true"
+```
 
 ---
 
 ## Step 2 — Configure Variables
 
-Edit `terraform/environments/prod/terraform.tfvars`:
+Edit `terraform/environments/prod/terraform.tfvars`. The file ships with working sample values — replace anything marked below:
 
 ```hcl
-location            = "eastus"
-resource_group_name = "rg-myapp-prod"
+location            = "eastus2"
+resource_group_name = "rg-private-aks-prod"
 environment         = "prod"
-aks_node_count      = 2
-aks_vm_size         = "Standard_D4s_v3"
-acr_name            = "acrmyappprod"      # must be globally unique
-keyvault_name       = "kv-myapp-prod"    # must be globally unique
-vnet_address_space  = "10.0.0.0/16"
-aks_subnet_cidr     = "10.0.1.0/24"
-pe_subnet_cidr      = "10.0.2.0/24"
+
+# AKS
+aks_node_count = 3          # per pool; auto-scaler max = node_count × 3 (system) / × 5 (user)
+aks_vm_size    = "Standard_D4ds_v5"
+
+# ACR — globally unique, alphanumeric only, 5-50 chars
+acr_name = "acrprivaksprod001"
+
+# Key Vault — globally unique, 3-24 chars
+keyvault_name = "kv-priv-aks-prod-001"
+
+# Networking — subnets must not overlap
+vnet_address_space = "10.0.0.0/8"
+aks_subnet_cidr    = "10.1.0.0/16"
+pe_subnet_cidr     = "10.2.0.0/24"
+agent_subnet_cidr  = "10.3.0.0/24"
+
+# Agent VM SSH key — paste the contents of your public key file
+agent_admin_username       = "azureuser"
+agent_admin_ssh_public_key = "ssh-rsa AAAA..."   # replace with your actual key
+agent_vm_size              = "Standard_D2s_v3"
 ```
+
+> **Important:** `terraform.tfvars` is tracked in git. Never put private keys or secrets here. The SSH key is a public key — that's fine. The actual agent registration (PAT) happens via cloud-init on first boot.
 
 ---
 
@@ -154,34 +188,28 @@ pe_subnet_cidr      = "10.0.2.0/24"
 ```bash
 cd terraform/environments/prod
 
-# Authenticate
 az login
 az account set --subscription "YOUR_SUBSCRIPTION_ID"
 
-# Initialize
-terraform init
-
-# Review plan
 terraform plan -out=tfplan
-
-# Apply
 terraform apply tfplan
 ```
 
 **What gets created:**
 - Resource Group
-- Virtual Network + subnets (AKS, private endpoints)
-- Network Security Groups
-- NAT Gateway (outbound internet for AKS nodes)
-- Azure Container Registry (Premium, no public access)
+- Virtual Network with three subnets: AKS (`10.1.0.0/16`), Private Endpoints (`10.2.0.0/24`), Agent (`10.3.0.0/24`)
+- Network Security Groups + NAT Gateway (outbound for AKS nodes)
+- Azure Container Registry (Premium, public access disabled)
 - Private Endpoint + Private DNS Zone for ACR
-- Azure Key Vault (no public access, RBAC mode)
+- Azure Key Vault (public access disabled, RBAC mode, soft-delete protected)
 - Private Endpoint + Private DNS Zone for Key Vault
-- Private AKS cluster (Azure CNI, Workload Identity, OIDC, CSI driver)
-- Managed Identity for AKS kubelet
-- Role assignments: AcrPull on ACR, Key Vault Secrets User on Key Vault
+- Private AKS cluster — Azure CNI, Calico network policy, system + user node pools, auto-scaling, availability zones, Workload Identity, OIDC issuer, CSI driver, Log Analytics
+- User-assigned managed identities: AKS control plane, AKS kubelet, workload identity (app pods)
+- Federated OIDC credential on the workload identity (wired to the `myapp` SA in the `myapp` namespace)
+- Azure DevOps agent VM (Ubuntu 22.04, system-assigned MI, cloud-init bootstrap)
+- Role assignments: AcrPull (kubelet → ACR), AcrPush (agent MI → ACR), Key Vault Secrets User (workload identity → Key Vault)
 
-**Save outputs:**
+**Save outputs for the next step:**
 ```bash
 terraform output -json > ../../../docs/terraform-outputs.json
 ```
@@ -190,60 +218,42 @@ terraform output -json > ../../../docs/terraform-outputs.json
 
 ## Step 4 — Configure AKS Access
 
-Since the cluster is private, kubectl access requires being inside the VNet (or using Azure Bastion / jump host):
+The API server has no public endpoint. Access requires being inside the VNet or using `az aks command invoke`:
 
 ```bash
-# Get credentials (run from inside VNet or via jump host)
 AKS_NAME=$(terraform output -raw aks_cluster_name)
 RG=$(terraform output -raw resource_group_name)
 
-az aks get-credentials \
-  --resource-group $RG \
-  --name $AKS_NAME \
-  --overwrite-existing
-
-# Verify
+# Option A: from inside the VNet (agent VM or Bastion)
+az aks get-credentials --resource-group $RG --name $AKS_NAME --overwrite-existing
 kubectl get nodes
-```
 
-> **Note:** For local development access, use `az aks command invoke` or set up an Azure Bastion host.
+# Option B: one-off commands without VPN (uses Azure API, slower)
+az aks command invoke --resource-group $RG --name $AKS_NAME --command "kubectl get nodes"
+```
 
 ---
 
-## Step 5 — Create Workload Identity Federation
+## Step 5 — Configure GitOps Values
 
-After AKS is provisioned, create the federated credential so pods can authenticate to Azure without secrets:
+Terraform creates the workload identity and its federated credential automatically. Before ArgoCD applies the chart, update `helm/myapp/values.yaml` with Terraform outputs:
 
-```bash
-# Get OIDC issuer URL
-OIDC_ISSUER=$(az aks show \
-  --name $AKS_NAME \
-  --resource-group $RG \
-  --query "oidcIssuerProfile.issuerUrl" -o tsv)
-
-# Get the managed identity client ID (from Terraform output)
-CLIENT_ID=$(terraform output -raw kubelet_identity_client_id)
-
-# Create federated credential
-az identity federated-credential create \
-  --name "myapp-federated-credential" \
-  --identity-name "id-myapp-kubelet" \
-  --resource-group $RG \
-  --issuer $OIDC_ISSUER \
-  --subject "system:serviceaccount:myapp:myapp" \
-  --audience "api://AzureADTokenExchange"
-```
-
-Update `helm/myapp/values.yaml`:
 ```yaml
 serviceAccount:
   annotations:
-    azure.workload.identity/client-id: "<CLIENT_ID>"
+    azure.workload.identity/client-id: "<terraform output -raw workload_identity_client_id>"
+
+image:
+  repository: "<terraform output -raw acr_login_server>/myapp"
 
 keyVault:
-  vaultName: "<KEY_VAULT_NAME>"
-  tenantId: "<TENANT_ID>"
+  vaultName: "<terraform output -raw keyvault_name>"   # just the name, not the URI
+  tenantId: "<az account show --query tenantId -o tsv>"
 ```
+
+The `application.yaml` already points to the real repository URL. If you fork this repo, update `argocd/application.yaml` and `argocd/project.yaml` with your clone URL and configure ArgoCD with read-only repository credentials.
+
+> **Do not** add a federated credential to the kubelet identity — it is scoped to AcrPull only and is not a workload identity.
 
 ---
 
@@ -251,63 +261,47 @@ keyVault:
 
 ```bash
 cd argocd
-
-# Make executable and run
 chmod +x install-argocd.sh
+
+# Dry-run first to see what will happen
+./install-argocd.sh --dry-run
+
+# Install (will prompt for confirmation)
 ./install-argocd.sh
 ```
 
-The script:
-1. Creates `argocd` namespace
-2. Installs ArgoCD via Helm (internal LoadBalancer)
-3. Applies AppProject and Application manifests
-4. Prints the initial admin password
+The script is idempotent — safe to re-run for upgrades. It:
+1. Creates `argocd`, `argo-rollouts`, and `myapp` namespaces
+2. Installs ArgoCD `v2.11.3` and Argo Rollouts `v1.7.1` via Helm (pinned versions)
+3. Patches `argocd-server` to an internal Azure Load Balancer (private IP only)
+4. Applies `project.yaml` then `application.yaml`
+5. Prints the one-time bootstrap password
+
+**After first login:**
+```bash
+argocd account update-password
+kubectl delete secret argocd-initial-admin-secret -n argocd
+```
+
+Configure SSO (Azure AD OIDC) and update the `groups` fields in `argocd/project.yaml` with your actual Azure AD group names before granting team access.
 
 ---
 
 ## Step 7 — Configure Azure DevOps Pipeline
 
-### 7.1 Create Service Connections
+### 7.1 Register the Agent VM
 
-In Azure DevOps → Project Settings → Service Connections:
-
-1. **ACR connection** (type: Docker Registry)
-   - Registry type: Azure Container Registry
-   - Name: `acr-service-connection`
-
-2. **AKS connection** (type: Kubernetes)
-   - Auth method: Azure Subscription
-   - Name: `aks-service-connection`
-
-### 7.2 Create Variable Groups
-
-In Azure DevOps → Pipelines → Library:
-
-**Group: `acr-secrets`**
-| Variable | Value |
-|----------|-------|
-| ACR_NAME | your-acr-name.azurecr.io |
-
-**Group: `git-deploy-secrets`**
-| Variable | Value | Secret? |
-|----------|-------|---------|
-| GIT_PAT | GitHub/ADO PAT token | ✅ |
-| GIT_USER_EMAIL | ci@yourorg.com | |
-| GIT_USER_NAME | CI Bot | |
-
-**Group: `pipeline-config`**
-| Variable | Value |
-|----------|-------|
-| HELM_REPO_URL | https://github.com/yourorg/yourrepo |
-| AKS_RESOURCE_GROUP | rg-myapp-prod |
-| AKS_CLUSTER_NAME | aks-myapp-prod |
-
-### 7.3 Configure Self-Hosted Agent
-
-The pipeline uses a self-hosted agent pool (`private-vnet-pool`) inside the VNet to reach the private AKS and ACR endpoints:
+The agent VM is provisioned by Terraform but must be registered in Azure DevOps manually (or via cloud-init — see `terraform/modules/azure_devops_agent/cloud-init.yaml.tftpl`):
 
 ```bash
-# On your agent VM (inside the VNet):
+# SSH into the agent VM (get its private IP from Terraform output)
+AGENT_VM=$(terraform output -raw agent_vm_name)
+AGENT_IP=$(az vm show -g $RG -n $AGENT_VM -d --query privateIps -o tsv)
+
+# From inside the VNet / Bastion:
+ssh azureuser@$AGENT_IP
+
+# On the agent VM:
 mkdir myagent && cd myagent
 curl -O https://vstsagentpackage.azureedge.net/agent/3.x/vsts-agent-linux-x64-3.x.tar.gz
 tar zxvf *.tar.gz
@@ -318,17 +312,25 @@ tar zxvf *.tar.gz
 ./svc.sh install && ./svc.sh start
 ```
 
-### 7.4 Create Pipeline
+### 7.2 Create Variable Groups
 
-In Azure DevOps → Pipelines → New Pipeline:
-- Source: your git repo
-- YAML: `pipeline/azure-pipelines.yml`
+In Azure DevOps → Pipelines → Library, create group `platform-config`:
 
-### 7.5 Configure Approval Gate
+| Variable | Value |
+|----------|-------|
+| `ACR_NAME` | `terraform output -raw acr_name` (e.g. `acrprivaksprod001`) |
+| `ACR_LOGIN_SERVER` | `terraform output -raw acr_login_server` |
+| `APP_NAME` | `myapp` |
 
-In Azure DevOps → Pipelines → Environments → `production`:
-- Add approval and check
-- Add required approvers
+The agent VM's system-assigned MI has `AcrPush` — no Docker credentials or registry service connection needed. Enable **Allow scripts to access the OAuth token** and grant the build service identity **Contribute** on the repo so the pipeline can commit the image tag back to `helm/myapp/values.yaml`.
+
+### 7.3 Create Pipeline
+
+Azure DevOps → Pipelines → New Pipeline → select your repo → YAML: `pipeline/azure-pipelines.yml`
+
+### 7.4 Configure Approval Gate
+
+Azure DevOps → Pipelines → Environments → `production` → Add approval check with required approvers.
 
 ---
 
@@ -337,43 +339,38 @@ In Azure DevOps → Pipelines → Environments → `production`:
 ### How it works
 
 ```
-Git push → Azure DevOps builds image → Pushes to ACR (private)
-       → Updates Helm values (image tag) → ArgoCD detects change
-       → Helm updates the blue and green Deployments
-       → Operator switches the active service selector after verification
+git push → Azure DevOps builds + tests image (Maven in Docker, smoke test)
+        → Pushes immutable tag to private ACR
+        → Commits image.tag to helm/myapp/values.yaml → ArgoCD detects change
+        → Argo Rollouts creates new ReplicaSet behind preview Service
+        → Pre-promotion analysis runs (Prometheus metrics)
+        → Operator promotes or aborts
 ```
 
 ### Traffic flow
 
 ```
-Ingress → myapp-active Service
-              │
-              ├── (activeSlot=blue)  → Blue Deployment  (v1.0)
-              └── (activeSlot=green) → Green Deployment (v2.0)
+Ingress → myapp-active Service  → stable ReplicaSet   (live traffic)
+       → myapp-preview Service → new ReplicaSet      (validation traffic)
 ```
 
-### Verify and switch a deployment
+### Verify and promote
 
 ```bash
-# Check both slots and the active Service selector
-kubectl get deployments,services -n myapp
-kubectl get endpoints myapp-active -n myapp
-```
+# Watch the rollout progress
+kubectl argo rollouts get rollout myapp -n myapp --watch
 
-### Switching active slot via Helm (manual override)
+# Check preview endpoints are healthy before promoting
+kubectl get endpoints myapp-preview -n myapp
 
-```bash
-# Switch to green
-helm upgrade myapp ./helm/myapp \
-  --namespace myapp \
-  --set blueGreen.activeSlot=green \
-  --reuse-values
+# Promote (switches active Service selector to new ReplicaSet)
+kubectl argo rollouts promote myapp -n myapp
 
-# Switch back to blue
-helm upgrade myapp ./helm/myapp \
-  --namespace myapp \
-  --set blueGreen.activeSlot=blue \
-  --reuse-values
+# Abort (leaves active revision serving, scales down preview)
+kubectl argo rollouts abort myapp -n myapp
+
+# Roll back to the previous completed revision
+kubectl argo rollouts undo myapp -n myapp
 ```
 
 ---
@@ -385,37 +382,41 @@ helm upgrade myapp ./helm/myapp \
 | Resource | Access Method |
 |----------|--------------|
 | AKS API Server | Private DNS + VNet only |
-| ACR | Private Endpoint in pe_subnet |
-| Key Vault | Private Endpoint in pe_subnet |
+| ACR | Private Endpoint in `pe_subnet` (`10.2.0.0/24`) |
+| Key Vault | Private Endpoint in `pe_subnet` (`10.2.0.0/24`) |
 | Pod → Key Vault | Workload Identity (OIDC JWT) → Key Vault RBAC |
 | Pod → ACR | Kubelet Managed Identity → AcrPull role |
+| Azure DevOps → ACR | Agent VM system MI → AcrPush role |
 
 ### Secret injection flow
 
 ```
 Pod starts
   → CSI Driver requests secret from Key Vault
-    → Uses Workload Identity (federated OIDC token)
-      → Azure AD validates token
-        → Returns secret
-          → Mounted as file at /mnt/secrets/
-            → Synced to Kubernetes Secret (optional)
+    → Uses Workload Identity (federated OIDC token from OIDC issuer)
+      → Azure AD validates token against federated credential
+        → Returns secret value
+          → Mounted as read-only file at /mnt/secrets/
 ```
+
+Secrets are never in environment variables, never in Kubernetes Secrets by default (the `syncSecret` option in SecretProviderClass is disabled).
 
 ### Least-privilege role assignments
 
 | Identity | Role | Scope |
 |----------|------|-------|
+| AKS Control Plane MI | Private DNS Zone Contributor | AKS private DNS zone |
+| AKS Control Plane MI | Network Contributor | AKS subnet |
 | AKS Kubelet MI | AcrPull | ACR only |
-| AKS Kubelet MI | Key Vault Secrets User | Key Vault only |
-| AKS Kubelet MI | Network Contributor | AKS subnet only |
-| ArgoCD SA | get/list/watch | myapp namespace only |
+| myapp Workload Identity | Key Vault Secrets User | Key Vault only |
+| Azure DevOps Agent MI | AcrPush | ACR only |
+| ArgoCD SA | get/list/watch | `myapp` namespace only |
 
 ---
 
 ## Observability
 
-ArgoCD analysis runs Prometheus queries during promotion:
+AKS ships logs to Log Analytics (workspace provisioned by the `aks` module). ArgoCD analysis runs Prometheus queries during blue-green promotion:
 
 | Metric | Threshold | Action on fail |
 |--------|-----------|----------------|
@@ -424,13 +425,15 @@ ArgoCD analysis runs Prometheus queries during promotion:
 | p99 latency | < 500ms | Abort rollout |
 | Pod restart rate | < 0.1/min | Abort rollout |
 
+> Prometheus must be deployed in the cluster for analysis to work. The `project.yaml` whitelists `monitoring.coreos.com` resources — deploy the kube-prometheus-stack chart into the `monitoring` namespace.
+
 ---
 
 ## Troubleshooting
 
 ### Cannot reach AKS API server
 ```bash
-# Use az aks command invoke for one-off commands without VPN
+# One-off commands without VPN
 az aks command invoke \
   --resource-group $RG \
   --name $AKS_NAME \
@@ -439,12 +442,12 @@ az aks command invoke \
 
 ### ACR pull fails
 ```bash
-# Verify private endpoint DNS resolution (from inside AKS pod)
+# Verify private DNS resolves to a private IP (from inside a pod)
 kubectl run -it --rm debug --image=busybox --restart=Never -- \
-  nslookup youracr.azurecr.io
-# Should resolve to 10.x.x.x (private IP), not public IP
+  nslookup acrprivaksprod001.azurecr.io
+# Expected: resolves to 10.2.x.x — if you see a public IP, the PE DNS zone is not linked
 
-# Check kubelet identity has AcrPull
+# Verify kubelet identity has AcrPull
 az role assignment list \
   --assignee $(az aks show -g $RG -n $AKS_NAME \
     --query identityProfile.kubeletidentity.clientId -o tsv) \
@@ -453,23 +456,25 @@ az role assignment list \
 
 ### Key Vault secret not mounting
 ```bash
-# Check SecretProviderClass
-kubectl describe secretproviderclass myapp-keyvault -n myapp
-
-# Check pod events
+kubectl describe secretproviderclass myapp-akv -n myapp
 kubectl describe pod <pod-name> -n myapp
 
-# Verify workload identity is configured
+# Verify workload identity annotation is set on the SA
 kubectl get sa myapp -n myapp -o yaml | grep azure
 ```
 
 ### ArgoCD out of sync
 ```bash
-# Force sync
 argocd app sync myapp --force
-
-# Check sync status
 argocd app get myapp
+```
+
+### Agent VM not appearing in Azure DevOps pool
+```bash
+# Check cloud-init completed successfully
+az vm run-command invoke -g $RG -n $AGENT_VM \
+  --command-id RunShellScript \
+  --scripts "cat /var/log/cloud-init-output.log | tail -50"
 ```
 
 ---
@@ -477,16 +482,12 @@ argocd app get myapp
 ## Cleanup
 
 ```bash
-# Destroy all infrastructure (WARNING: irreversible)
+# Destroy all infrastructure — this is irreversible
 cd terraform/environments/prod
 terraform destroy
 
-# This will delete:
-# - AKS cluster and all workloads
-# - ACR and all images
-# - Key Vault and all secrets
-# - VNet and all networking
-# - All role assignments
+# Deletes: AKS cluster, ACR + all images, Key Vault + all secrets,
+#          VNet, agent VM, Log Analytics workspace, all role assignments
 ```
 
 ---
@@ -494,16 +495,22 @@ terraform destroy
 ## Quick Reference
 
 ```bash
-# Check blue/green Deployments and active Service
-kubectl get deployments,services,endpoints -n myapp
+# Blue-green status
+kubectl argo rollouts get rollout myapp -n myapp --watch
 
 # ArgoCD sync
 argocd app sync myapp
 
-# Get ArgoCD admin password
+# Get ArgoCD admin password (if secret still exists)
 kubectl get secret argocd-initial-admin-secret \
   -n argocd -o jsonpath="{.data.password}" | base64 -d
 
-# Helm diff before upgrade
-helm diff upgrade myapp ./helm/myapp -n myapp -f values.yaml
+# Port-forward ArgoCD UI locally (from inside VNet or via Bastion)
+kubectl port-forward svc/argocd-server -n argocd 8080:443
+
+# Helm diff before a manual upgrade
+helm diff upgrade myapp ./helm/myapp -n myapp -f helm/myapp/values.yaml
+
+# Check all deployments, services, endpoints in myapp namespace
+kubectl get rollouts,services,endpoints -n myapp
 ```
